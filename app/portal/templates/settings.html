@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Settings — AI Revenue Recovery{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-6">
+  <div>
+    <h1 class="text-2xl font-display font-extrabold">Settings</h1>
+    <p class="text-sm text-[var(--text-muted)] mt-1">Runtime controls and integration status for this environment.</p>
+  </div>
+
+  <div class="card p-5">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <h2 class="text-sm font-semibold">Auto-dispatch</h2>
+        <p class="text-xs text-[var(--text-muted)] mt-1 max-w-xl">When ON, "Run batch" on the Upload page decides and sends every case that's due — each new escalation can mint a real Razorpay payment link. When OFF, "Run batch" does nothing (it still keeps cases/reliability scores in sync). Per-case "Send now (test)" on the Cases page always works either way — this only guards the automatic sweep.</p>
+      </div>
+      <button id="auto-dispatch-toggle" class="btn btn-secondary" disabled>Loading…</button>
+    </div>
+  </div>
+
+  <div class="card p-5">
+    <h2 class="text-sm font-semibold mb-3">Integration status</h2>
+    <div class="grid sm:grid-cols-3 gap-3 text-sm">
+      <div class="card p-3.5">
+        <div class="text-xs text-[var(--text-muted)] mb-1">Razorpay</div>
+        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if razorpay_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
+          {{ 'configured' if razorpay_configured else 'not configured (stub links)' }}
+        </span>
+      </div>
+      <div class="card p-3.5">
+        <div class="text-xs text-[var(--text-muted)] mb-1">Twilio (voice + WhatsApp)</div>
+        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if twilio_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
+          {{ 'configured' if twilio_configured else 'not configured (log-only)' }}
+        </span>
+      </div>
+      <div class="card p-3.5">
+        <div class="text-xs text-[var(--text-muted)] mb-1">SendGrid (email)</div>
+        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if sendgrid_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
+          {{ 'configured' if sendgrid_configured else 'not configured (log-only)' }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card p-5">
+    <h2 class="text-sm font-semibold mb-3">Testing overrides in effect</h2>
+    <div class="flex flex-col gap-2 text-sm">
+      <div>
+        <span class="text-[var(--text-muted)]">TEST_EMAIL_OVERRIDE:</span>
+        {% if test_email_override %}
+          <span class="num">{{ test_email_override }}</span> — every escalation email is redirected here instead of the sheet's real spoc/manager/skip_level addresses.
+        {% else %}
+          <span class="text-[var(--text-muted)]">not set — emails go to real per-customer recipients.</span>
+        {% endif %}
+      </div>
+      <div>
+        <span class="text-[var(--text-muted)]">PAYMENT_NOTIFY_WHATSAPP_TO:</span>
+        {% if payment_notify_whatsapp_to %}
+          <span class="num">{{ payment_notify_whatsapp_to }}</span> — fallback recipient for the payment-received WhatsApp alert when nobody has queried that account yet.
+        {% else %}
+          <span class="text-[var(--text-muted)]">not set — payment-received alerts only reach whoever last WhatsApp-queried that account.</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const toggleBtn = document.getElementById('auto-dispatch-toggle');
+
+function renderToggle(paused) {
+  toggleBtn.disabled = false;
+  toggleBtn.dataset.paused = paused;
+  if (paused) {
+    toggleBtn.textContent = 'Auto-dispatch: OFF (paused)';
+    toggleBtn.className = 'btn btn-secondary';
+    toggleBtn.style.background = '';
+  } else {
+    toggleBtn.textContent = 'Auto-dispatch: ON';
+    toggleBtn.className = 'btn btn-primary';
+    toggleBtn.style.background = 'var(--danger)';
+  }
+}
+
+renderToggle({{ 'true' if auto_dispatch_paused else 'false' }});
+
+toggleBtn.addEventListener('click', async () => {
+  const currentlyPaused = toggleBtn.dataset.paused === 'true';
+  toggleBtn.disabled = true;
+  const resp = await fetch('/api/settings/auto-dispatch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paused: !currentlyPaused }),
+  });
+  const data = await resp.json();
+  renderToggle(data.auto_dispatch_paused);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+{
+  "name": "receivables_escalation",
+  "version": 1,
+  "type": "escalation",
+  "levels": [
+    {
+      "channel": "email",
+      "recipients": "spoc",
+      "message": "Hi {{spoc_name}}, your account {{customer_name}} has invoice {{invoice_no}} for {{amount}} now {{days_overdue}} days overdue (total outstanding for this customer: {{customer_outstanding}}). Please follow up directly. Payment link for reference: {{pay_link}}"
+    },
+    {
+      "channel": "email",
+      "recipients": "manager",
+      "cc": "spoc",
+      "message": "{{manager_name}}, {{spoc_name}}'s account {{customer_name}} remains unpaid: invoice {{invoice_no}} for {{amount}}, {{days_overdue}} days overdue (customer's total outstanding: {{customer_outstanding}}). No resolution since the last reminder — please help expedite. Payment link: {{pay_link}}"
+    },
+    {
+      "channel": "email",
+      "recipients": "skip_level",
+      "cc": "manager,spoc",
+      "message": "{{skip_level_name}}, escalating {{customer_name}} (SPOC: {{spoc_name}}, Manager: {{manager_name}}): invoice {{invoice_no}} for {{amount}} is now {{days_overdue}} days overdue and unresolved after two internal reminders (customer's total outstanding: {{customer_outstanding}}). Payment link: {{pay_link}}"
+    },
+    {
+      "channel": "voice",
+      "recipients": "customer",
+      "message": "Namaste {{customer_name}}, yeh ek zaroori reminder hai. Aapka invoice {{invoice_no}}, amount {{amount}}, {{days_overdue}} din se overdue hai. Kripya jald se jald bhugtan karein warna is case ko aage escalate kiya jayega."
+    }
+  ],
+  "onExhausted": {
+    "status": "exhausted"
+  }
+}

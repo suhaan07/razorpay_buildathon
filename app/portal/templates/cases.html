@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Cases — AI Revenue Recovery{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-5">
+  <div>
+    <h1 class="text-2xl font-display font-extrabold">Cases</h1>
+    <p class="text-sm text-[var(--text-muted)] mt-1">Click a row for its full decision + dispatch timeline, and to preview or force-send its next message.</p>
+  </div>
+
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm min-w-[760px]">
+      <thead>
+        <tr>
+          <th class="p-3 text-left">Customer</th>
+          <th class="p-3 text-left">Invoice</th>
+          <th class="p-3 text-left">Bucket</th>
+          <th class="p-3 text-left">Status</th>
+          <th class="p-3 text-left">Escalation level</th>
+          <th class="p-3 text-right">Outstanding</th>
+          <th class="p-3 text-right">Score</th>
+          <th class="p-3 text-left">Band</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cases %}
+        <tr class="cursor-pointer" onclick="openCaseModal({{ c.id }})">
+          <td class="p-3">{{ c.customer }}</td>
+          <td class="p-3 num">{{ c.invoice_no }}</td>
+          <td class="p-3">{{ c.bucket }}</td>
+          <td class="p-3">
+            <span class="pill pill-{{ c.status }}">{{ c.status }}</span>
+          </td>
+          <td class="p-3 capitalize">{{ c.level.replace('_', ' ') }}</td>
+          <td class="p-3 text-right num">{{ c.outstanding }}</td>
+          <td class="p-3 text-right num">{{ c.score }}</td>
+          <td class="p-3">{{ c.band }}</td>
+        </tr>
+        {% else %}
+        <tr><td class="p-6 text-center text-[var(--text-muted)]" colspan="8">No cases yet — upload a sheet to create them.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="case-modal-backdrop" class="fixed inset-0 z-50 hidden items-center justify-center p-4" style="background:rgba(15,17,23,0.5)" onclick="if (event.target === this) closeCaseModal()">
+  <div class="card w-full max-w-2xl min-w-0 max-h-[85vh] flex flex-col relative overflow-x-hidden">
+    <button onclick="closeCaseModal()" class="absolute top-4 right-4 z-10 text-[var(--text-muted)] hover:text-[var(--text)] text-xl leading-none bg-[var(--surface)] rounded-full w-7 h-7 flex items-center justify-center">&times;</button>
+    <div id="case-modal-body" class="min-w-0 overflow-y-auto overflow-x-hidden p-5"><div class="text-sm text-[var(--text-muted)]">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+const modalBackdrop = document.getElementById('case-modal-backdrop');
+const modalBody = document.getElementById('case-modal-body');
+let currentModalCaseId = null;
+
+async function openCaseModal(caseId) {
+  currentModalCaseId = caseId;
+  modalBackdrop.classList.remove('hidden');
+  modalBackdrop.classList.add('flex');
+  modalBody.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Loading…</div>';
+  await loadModalCase(caseId);
+}
+
+async function loadModalCase(caseId) {
+  const resp = await fetch(`/api/cases/${caseId}`);
+  const data = await resp.json();
+  modalBody.innerHTML = buildCaseCardHTML(data);
+  wireCaseCardActions(modalBody, caseId, () => loadModalCase(caseId));
+}
+
+function closeCaseModal() {
+  modalBackdrop.classList.add('hidden');
+  modalBackdrop.classList.remove('flex');
+  currentModalCaseId = null;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && currentModalCaseId !== null) closeCaseModal();
+});
+</script>
+{% endblock %}

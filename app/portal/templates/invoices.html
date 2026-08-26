@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Invoices — AI Revenue Recovery{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-5">
+  <h1 class="text-2xl font-display font-extrabold">Invoices</h1>
+
+  <div id="unclassified-banner" class="hidden rounded-lg bg-[var(--warning-soft)] border border-[var(--warning-border)] text-[var(--warning)] text-sm px-4 py-2.5"></div>
+
+  <div id="tabs" class="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1"></div>
+
+  <input id="search" type="text" placeholder="Search customer or invoice no…"
+    class="w-full sm:w-96 border border-[var(--border)] rounded-lg px-3.5 py-2.5 bg-[var(--surface)] text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent-soft)] focus:border-[var(--accent)]">
+
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm min-w-[680px]">
+      <thead>
+        <tr>
+          <th class="p-3 text-left">Customer</th>
+          <th class="p-3 text-left">Invoice</th>
+          <th class="p-3 text-left">Due Date</th>
+          <th class="p-3 text-left">Bucket</th>
+          <th class="p-3 text-right">Outstanding</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div id="count" class="text-xs text-[var(--text-muted)]"></div>
+</div>
+
+<script>
+const BUCKET_DOT = {
+  'All': '#9aa0ad', 'Not Due': '#9aa0ad', '0-15': '#0e8a58', '16-30': '#1d4ed8',
+  '31-60': '#a15c00', '61-90': '#c2410c', '90+': '#b3261e',
+};
+const BUCKET_PILL = {
+  'Not Due': 'background:var(--surface-2);color:var(--text-muted)',
+  '0-15': 'background:var(--success-soft);color:var(--success)',
+  '16-30': 'background:var(--info-soft);color:var(--info)',
+  '31-60': 'background:var(--warning-soft);color:var(--warning)',
+  '61-90': 'background:#fde3d0;color:#c2410c',
+  '90+': 'background:var(--danger-soft);color:var(--danger)',
+  'Unclassified': 'background:var(--warning-soft);color:var(--warning)',
+};
+
+let activeTab = 'All';
+let searchTimer = null;
+
+function tabCard(tab) {
+  const active = tab.key === activeTab;
+  const dot = BUCKET_DOT[tab.key] || '#9aa0ad';
+  return `
+    <button data-key="${tab.key}" class="tab-btn text-left shrink-0 rounded-xl border px-4 py-3 min-w-[128px] transition
+      ${active ? 'border-[var(--accent)] shadow-sm bg-white ring-1 ring-[var(--accent-soft)]' : 'border-[var(--border)] bg-white hover:border-[var(--text-muted)]'}">
+      <div class="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] mb-1.5 font-medium">
+        <span class="w-1.5 h-1.5 rounded-full" style="background:${dot}"></span>${tab.label}
+      </div>
+      <div class="text-xl font-display font-bold num">${tab.count}</div>
+      <div class="text-[11px] text-[var(--text-muted)] num mt-0.5">${tab.total_display}</div>
+    </button>`;
+}
+
+function rowHtml(r) {
+  const pillStyle = BUCKET_PILL[r.bucket] || 'background:var(--surface-2);color:var(--text-muted)';
+  const href = r.case_id ? `/cases/${r.case_id}` : null;
+  return `
+    <tr class="${href ? 'cursor-pointer' : ''} ${r.unclassified ? 'bg-[var(--warning-soft)]/40' : ''}" ${href ? `onclick="window.location='${href}'"` : ''}>
+      <td class="p-3">${r.customer}</td>
+      <td class="p-3 num">${r.invoice_no}</td>
+      <td class="p-3 num">${r.due_date_display}</td>
+      <td class="p-3"><span class="pill" style="${pillStyle}">${r.bucket}</span></td>
+      <td class="p-3 text-right num">${r.outstanding_display}</td>
+    </tr>`;
+}
+
+async function load() {
+  const q = document.getElementById('search').value.trim();
+  const params = new URLSearchParams({ tab: activeTab });
+  if (q) params.set('q', q);
+  const resp = await fetch('/api/invoices?' + params.toString());
+  const data = await resp.json();
+
+  document.getElementById('tabs').innerHTML = data.tabs.map(tabCard).join('');
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => { activeTab = btn.dataset.key; load(); });
+  });
+
+  document.getElementById('rows').innerHTML = data.rows.map(rowHtml).join('') ||
+    '<tr><td class="p-6 text-center text-[var(--text-muted)]" colspan="5">No invoices match.</td></tr>';
+  document.getElementById('count').textContent = `${data.count} invoice${data.count === 1 ? '' : 's'}`;
+
+  const banner = document.getElementById('unclassified-banner');
+  if (data.unclassified_count > 0) {
+    banner.textContent = `${data.unclassified_count} invoice(s) have no due date on file and are shown as Unclassified.`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+
+document.getElementById('search').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(load, 250);
+});
+
+load();
+</script>
+{% endblock %}

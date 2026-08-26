@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Batch report — AI Revenue Recovery{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-5">
+  <h1 class="text-2xl font-display font-extrabold">Batch report</h1>
+
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div class="card p-4">
+      <div class="text-xs text-[var(--text-muted)]">Recovery rate</div>
+      <div class="text-2xl font-display font-bold num mt-1">{{ (report.recovery_rate * 100) | round(1) }}%</div>
+      <div class="text-xs text-[var(--text-muted)] num mt-0.5">{{ report.closed_paid }} / {{ report.total_cases }} cases</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-[var(--text-muted)]">Avg days to recovery</div>
+      <div class="text-2xl font-display font-bold num mt-1">{{ report.avg_days_to_recovery if report.avg_days_to_recovery is not none else '-' }}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-[var(--text-muted)]">Needed manager+</div>
+      <div class="text-2xl font-display font-bold num mt-1">{{ report.escalated_beyond_spoc }}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-[var(--text-muted)]">Reached final voice call</div>
+      <div class="text-2xl font-display font-bold num mt-1">{{ report.reached_voice }}</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+    <div class="card p-3.5"><span class="pill pill-open">open</span> <span class="num ml-1">{{ report.open_cases }}</span></div>
+    <div class="card p-3.5"><span class="pill pill-paused">paused</span> <span class="num ml-1">{{ report.paused_cases }}</span></div>
+    <div class="card p-3.5"><span class="pill pill-exhausted">exhausted</span> <span class="num ml-1">{{ report.exhausted_cases }}</span></div>
+  </div>
+
+  <div class="card p-4">
+    <div class="text-xs text-[var(--text-muted)]">Recovered amount</div>
+    <div class="text-2xl font-display font-bold num mt-1">{{ format_inr(report.recovered_amount) }}</div>
+    <div class="text-xs text-[var(--text-muted)] mt-1 num">Outstanding across everything still open/paused/exhausted: {{ format_inr(report.outstanding_amount) }}</div>
+  </div>
+
+  <div>
+    <h2 class="text-sm font-semibold mb-3">Exceptions — exhausted, unpaid despite the full chain</h2>
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm min-w-[560px]">
+        <thead>
+          <tr><th class="p-3 text-left">Customer</th><th class="p-3 text-left">Invoice</th><th class="p-3 text-right">Outstanding</th><th class="p-3 text-left">Reached</th></tr>
+        </thead>
+        <tbody>
+          {% for e in report.exceptions %}
+          <tr>
+            <td class="p-3">{{ e.customer_name }}</td>
+            <td class="p-3 num">{{ e.invoice_no }}</td>
+            <td class="p-3 text-right num">{{ format_inr(e.outstanding) }}</td>
+            <td class="p-3 capitalize">{{ e.reached_level.replace('_', ' ') }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="p-6 text-center text-[var(--text-muted)]" colspan="4">No exceptions — nothing has exhausted the full chain unpaid so far.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

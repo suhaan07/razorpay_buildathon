@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Upload — AI Revenue Recovery{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-6">
+
+  <div>
+    <h1 class="text-2xl font-display font-extrabold">Upload AR invoice sheet</h1>
+    <p class="text-sm text-[var(--text-muted)] mt-1">Currently tracking <span class="num font-medium text-[var(--text)]">{{ customer_count }}</span> customers, <span class="num font-medium text-[var(--text)]">{{ invoice_count }}</span> invoices.</p>
+  </div>
+
+  <div class="card p-5">
+    <h2 class="text-sm font-semibold mb-3">1. Ingest a sheet</h2>
+    <form id="upload-form" class="flex flex-wrap items-center gap-3">
+      <input type="file" id="file-input" accept=".xlsx" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)] file:mr-3 file:border-0 file:bg-[var(--accent-soft)] file:text-[var(--accent)] file:font-semibold file:rounded-md file:px-3 file:py-1.5">
+      <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+    <div id="result" class="text-sm mt-3"></div>
+  </div>
+
+  <div class="card p-5">
+    <h2 class="text-sm font-semibold mb-1">2. Run the escalation engine</h2>
+    <p class="text-xs text-[var(--text-muted)] mb-3">Decides + dispatches every case that's due right now (see <a href="/cases" class="text-[var(--accent)] hover:underline">Cases</a> for per-case testing tools — preview or force-send without waiting).</p>
+    <div class="flex flex-wrap items-center gap-3">
+      <button id="run-batch" class="btn btn-primary" style="background:var(--success)">Run batch (decide + dispatch)</button>
+      <span id="auto-dispatch-status" class="text-xs"></span>
+    </div>
+    <p class="text-xs text-[var(--text-muted)] mt-2">Each new escalation can mint a real Razorpay payment link — auto-dispatch is controlled from <a href="/settings" class="text-[var(--accent)] hover:underline">Settings</a>. Per-case "Send now (test)" on the Cases page always works regardless of that toggle.</p>
+    <div id="batch-result" class="text-sm mt-3"></div>
+  </div>
+
+  <div class="card p-5">
+    <h2 class="text-sm font-semibold mb-1">3. Test a channel directly</h2>
+    <p class="text-xs text-[var(--text-muted)] mb-3">Sends a real message with placeholder sample content — not tied to any case — so you can confirm Twilio Voice or email actually work, and hear/see exactly what they say, without waiting for a real case to reach that level.</p>
+    <div class="flex flex-wrap items-center gap-2.5">
+      <select id="test-channel" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)]">
+        <option value="voice">Voice call</option>
+        <option value="email">Email</option>
+      </select>
+      <input id="test-to" type="text" placeholder="+91XXXXXXXXXX or name@example.com" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)] flex-1 min-w-[220px]">
+      <button id="test-preview-btn" class="btn btn-secondary">Preview script</button>
+      <button id="test-send-btn" class="btn btn-primary" style="background:var(--success)">Send test now</button>
+    </div>
+    <div id="test-channel-result" class="mt-3"></div>
+  </div>
+
+</div>
+
+<script>
+document.getElementById('upload-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const file = document.getElementById('file-input').files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  const resp = await fetch('/upload', { method: 'POST', body: formData });
+  const data = await resp.json();
+  const el = document.getElementById('result');
+  if (resp.ok) {
+    el.innerHTML = `<span class="text-[var(--success)]">Ingested ${data.row_count} rows across ${data.customer_count} customers.</span> ` +
+      (data.missing_due_date_count ? `<span class="text-[var(--warning)]">${data.missing_due_date_count} rows missing a due date.</span>` : '');
+  } else {
+    el.innerHTML = `<span class="text-[var(--danger)]">${data.detail}</span>`;
+  }
+});
+
+document.getElementById('run-batch').addEventListener('click', async () => {
+  const el = document.getElementById('batch-result');
+  el.textContent = 'Running…';
+  try {
+    const resp = await fetch('/batch/run', { method: 'POST' });
+    const text = await resp.text();
+    if (!resp.ok) {
+      el.innerHTML = `<span class="text-[var(--danger)]">Batch run failed (HTTP ${resp.status}): ${text.slice(0, 500)}</span>`;
+      return;
+    }
+    const data = JSON.parse(text);
+    if (data.auto_dispatch_paused) {
+      el.innerHTML = `<span class="text-[var(--warning)]">Auto-dispatch is paused — nothing was sent, no links were created. Toggle it on above if you meant to dispatch for real.</span>`;
+      return;
+    }
+    const failedNote = data.failed ? ` <span class="text-[var(--danger)]">failed=${data.failed} (see a case's timeline for the error)</span>` : '';
+    el.innerHTML = `<span class="num">processed=${data.processed} dispatched=${data.dispatched} paused=${data.paused} exhausted=${data.exhausted}</span>${failedNote}`;
+  } catch (err) {
+    el.innerHTML = `<span class="text-[var(--danger)]">Request failed: ${err}</span>`;
+  }
+});
+
+(async () => {
+  const resp = await fetch('/api/settings');
+  const data = await resp.json();
+  const el = document.getElementById('auto-dispatch-status');
+  el.innerHTML = data.auto_dispatch_paused
+    ? '<span class="text-[var(--warning)]">Auto-dispatch is OFF — Run batch will do nothing until you turn it on in Settings.</span>'
+    : '<span class="text-[var(--danger)]">Auto-dispatch is ON — Run batch will actually send.</span>';
+})();
+
+document.getElementById('test-preview-btn').addEventListener('click', async () => {
+  const channel = document.getElementById('test-channel').value;
+  const el = document.getElementById('test-channel-result');
+  el.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Loading…</div>';
+  const resp = await fetch(`/api/test/sample-message?channel=${channel}`);
+  const data = await resp.json();
+  el.innerHTML = `<div class="card p-4 text-sm"><div class="text-xs text-[var(--text-muted)] mb-2">Would go to role: ${data.recipients_role}</div><pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px]">${data.body}</pre></div>`;
+});
+
+document.getElementById('test-send-btn').addEventListener('click', async () => {
+  const channel = document.getElementById('test-channel').value;
+  const to = document.getElementById('test-to').value.trim();
+  const el = document.getElementById('test-channel-result');
+  if (!to) { el.innerHTML = '<span class="text-[var(--danger)]">Enter a phone number or email first.</span>'; return; }
+  el.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Sending…</div>';
+  try {
+    const resp = await fetch(`/api/test/send?channel=${channel}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to }),
+    });
+    const data = await resp.json();
+    const color = data.status === 'sent' ? 'var(--success)' : (data.status === 'logged' ? 'var(--text-muted)' : 'var(--danger)');
+    el.innerHTML = `<div class="card p-4 text-sm"><div style="color:${color}"><strong>${data.status}</strong> — ${data.detail}</div><pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px] mt-2">${data.body}</pre></div>`;
+  } catch (err) {
+    el.innerHTML = `<span class="text-[var(--danger)]">Request failed: ${err}</span>`;
+  }
+});
+</script>
+{% endblock %}

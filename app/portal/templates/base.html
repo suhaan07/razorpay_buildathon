@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AI Revenue Recovery{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg: #f3f4f7;
+      --surface: #ffffff;
+      --surface-2: #f8f9fb;
+      --border: #e3e5ea;
+      --text: #14161c;
+      --text-muted: #676c78;
+      --accent: #4338ca;
+      --accent-soft: #eceafd;
+      --success: #0e8a58;
+      --success-soft: #e4f6ee;
+      --success-border: #b9e6cf;
+      --warning: #a15c00;
+      --warning-soft: #fdf1dc;
+      --warning-border: #f0d49a;
+      --danger: #b3261e;
+      --danger-soft: #fce9e8;
+      --danger-border: #f1bcb8;
+      --info: #1d4ed8;
+      --info-soft: #eaf0fe;
+      --info-border: #c4d5fb;
+      --shadow: 0 1px 2px rgba(20,22,28,0.04), 0 4px 14px -6px rgba(20,22,28,0.10);
+    }
+    * { box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    h1, h2, h3, .font-display { font-family: "Manrope", ui-sans-serif, sans-serif; letter-spacing: -0.01em; }
+    .num, table td.num, .tabular { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+    .app-sidebar {
+      background: #0e1016;
+      width: 216px;
+    }
+    .app-sidebar a {
+      display: flex; align-items: center; gap: 10px;
+      color: #9aa0ad;
+      font-size: 13.5px;
+      font-weight: 500;
+      padding: 9px 12px;
+      border-radius: 8px;
+      transition: color .12s ease, background .12s ease;
+    }
+    .app-sidebar a svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .app-sidebar a:hover { color: #fff; background: rgba(255,255,255,0.06); }
+    .app-sidebar a.active { color: #fff; background: var(--accent); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13.5px; font-weight: 600;
+      padding: 8px 14px; border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer; transition: filter .12s ease, background .12s ease;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
+    .btn-secondary:hover:not(:disabled) { background: var(--surface-2); }
+    .btn-ghost { background: transparent; color: var(--accent); padding: 8px 10px; }
+    .btn-ghost:hover:not(:disabled) { background: var(--accent-soft); }
+
+    .pill { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; letter-spacing: 0.01em; }
+    .pill-open { background: var(--info-soft); color: var(--info); }
+    .pill-closed { background: var(--success-soft); color: var(--success); }
+    .pill-paused { background: var(--warning-soft); color: var(--warning); }
+    .pill-exhausted { background: var(--danger-soft); color: var(--danger); }
+
+    table thead th {
+      font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--text-muted); font-weight: 600; background: var(--surface-2);
+    }
+    table tbody tr:hover { background: var(--surface-2); }
+    table tbody tr { border-top: 1px solid var(--border); }
+
+    ::selection { background: var(--accent-soft); }
+  </style>
+</head>
+<body>
+  <div class="flex min-h-screen items-stretch">
+    <aside class="app-sidebar shrink-0 flex flex-col p-3 gap-1">
+      <div class="font-display font-extrabold text-white text-[15px] flex items-center gap-2 px-2 py-3 mb-2">
+        <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
+        AI Revenue Recovery
+      </div>
+      <a href="/" class="{{ 'active' if request.url.path == '/' }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload
+      </a>
+      <a href="/invoices" class="{{ 'active' if request.url.path == '/invoices' }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+        Invoices
+      </a>
+      <a href="/cases" class="{{ 'active' if request.url.path.startswith('/cases') }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        Cases
+      </a>
+      <a href="/report" class="{{ 'active' if request.url.path == '/report' }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Report
+      </a>
+      <a href="/settings" class="{{ 'active' if request.url.path == '/settings' }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        Settings
+      </a>
+    </aside>
+    <main class="flex-1 min-w-0 overflow-x-hidden">
+      <div class="max-w-6xl mx-auto p-4 sm:p-6">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+  <script>
+    // Shared between cases.html (opens this in a modal) and case_detail.html
+    // (renders it straight into the page) so the two never drift apart.
+    function buildCaseCardHTML(data) {
+      const decision = data.last_decision;
+      const decisionCard = decision ? `
+        <div class="card p-4">
+          <div class="text-xs text-[var(--text-muted)] mb-2">Why this schedule</div>
+          <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)] mb-2">
+            ${decision.urgency_score != null ? `<span><strong class="text-[var(--text)]">Urgency score:</strong> ${decision.urgency_score}</span>` : ''}
+            ${decision.suggested_level ? `<span><strong class="text-[var(--text)]">Decided level:</strong> ${decision.suggested_level.replace('_',' ')}</span>` : ''}
+            ${decision.wait_days != null ? `<span><strong class="text-[var(--text)]">Wait before next:</strong> ${decision.wait_days}d</span>` : ''}
+            ${decision.decided_at_display ? `<span><strong class="text-[var(--text)]">Decided at:</strong> ${decision.decided_at_display}</span>` : ''}
+          </div>
+          ${decision.rationale ? `<div class="text-sm">${decision.rationale}</div>` : ''}
+        </div>` : '';
+
+      const invoiceRows = (data.other_invoices || []).map(inv => `
+        <tr class="border-t border-[var(--border)] ${inv.is_this_case ? 'font-semibold' : ''}">
+          <td class="py-1.5 num">${inv.invoice_no}${inv.is_this_case ? ' <span class="text-[var(--accent)] text-[11px] font-semibold">(this case)</span>' : ''}</td>
+          <td class="py-1.5">${inv.due_date_display}</td>
+          <td class="py-1.5 text-right num">${inv.amount_display}</td>
+        </tr>`).join('');
+
+      const events = (data.events || []).map(e => `
+        <div class="card p-3.5 text-sm">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="pill" style="
+              ${e.type === 'decision' ? 'background:var(--accent-soft);color:var(--accent)'
+                : e.type === 'dispatch' ? 'background:var(--info-soft);color:var(--info)'
+                : e.type === 'webhook' ? 'background:var(--success-soft);color:var(--success)'
+                : 'background:var(--surface-2);color:var(--text-muted)'}">
+              ${e.type}${e.channel ? ` &middot; ${e.channel}` : ''}
+            </span>
+            <span class="text-xs text-[var(--text-muted)] num">${e.created_at_display}</span>
+          </div>
+          ${e.rationale ? `<div class="text-[var(--text)] mb-1">${e.rationale}</div>` : ''}
+          ${e.payload_display ? `<div class="text-xs text-[var(--text-muted)] break-all">${e.payload_display}</div>` : ''}
+        </div>`).join('') || '<div class="text-sm text-[var(--text-muted)]">No events yet.</div>';
+
+      return `
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-wrap items-center gap-3">
+            <h2 class="text-xl font-display font-extrabold">${data.customer}</h2>
+            <span class="pill pill-${data.status}">${data.status}</span>
+          </div>
+          <p class="text-sm text-[var(--text-muted)] -mt-3">Invoice <span class="num">${data.invoice_no}</span> &middot; ${data.bucket} &middot; <span class="num">${data.outstanding_display}</span> outstanding</p>
+
+          <div class="grid sm:grid-cols-3 gap-3">
+            <div class="card p-4">
+              <div class="text-xs text-[var(--text-muted)]">Escalation level</div>
+              <div class="text-lg font-display font-bold capitalize mt-1">${data.level ? data.level.replace('_',' ') : 'Not yet assigned'}</div>
+            </div>
+            <div class="card p-4">
+              <div class="text-xs text-[var(--text-muted)]">Reliability</div>
+              <div class="text-lg font-display font-bold mt-1 num">${data.score != null ? data.score : '-'} <span class="text-sm font-normal text-[var(--text-muted)]">${data.band || ''}</span></div>
+              ${data.on_time_rate_pct != null ? `<div class="text-xs text-[var(--text-muted)] mt-1">${data.on_time_rate_pct}% on-time &middot; avg ${data.avg_days_late}d late</div>` : ''}
+            </div>
+            <div class="card p-4">
+              <div class="text-xs text-[var(--text-muted)]">Next action (IST)</div>
+              <div class="text-base font-display font-bold mt-1 num">${data.next_action_display}</div>
+            </div>
+          </div>
+
+          ${decisionCard}
+
+          ${(data.pay_link_url || data.pay_link_unavailable || data.consolidated_pay_link_url || data.consolidated_pay_link_unavailable) ? `
+          <div class="card p-4 text-sm flex flex-col gap-2">
+            <div>
+              <span class="text-[var(--text-muted)]">Pay this invoice (${data.outstanding_display}):</span>
+              ${data.pay_link_url
+                ? `<a href="${data.pay_link_url}" target="_blank" class="text-[var(--accent)] hover:underline num break-all">${data.pay_link_url}</a>`
+                : `<span class="text-[var(--warning)]">not available right now</span>`}
+            </div>
+            ${data.consolidated_total_display ? `
+            <div>
+              <span class="text-[var(--text-muted)]">Pay everything for this customer (${data.consolidated_total_display}):</span>
+              ${data.consolidated_pay_link_url
+                ? `<a href="${data.consolidated_pay_link_url}" target="_blank" class="text-[var(--accent)] hover:underline num break-all">${data.consolidated_pay_link_url}</a>`
+                : `<span class="text-[var(--warning)]">not available right now</span>`}
+            </div>` : ''}
+            ${(data.pay_link_unavailable || data.consolidated_pay_link_unavailable) ? `
+            <div class="text-xs text-[var(--text-muted)] pt-1 border-t border-[var(--border)]">A link couldn't be generated automatically for the one above marked unavailable — share payment details with the customer directly for that one.</div>` : ''}
+          </div>` : ''}
+
+          <div class="card p-4">
+            <div class="text-xs text-[var(--text-muted)] mb-2">All outstanding invoices for this customer</div>
+            <table class="w-full text-sm">
+              <thead><tr class="text-[var(--text-muted)] text-xs"><th class="text-left font-medium pb-1">Invoice</th><th class="text-left font-medium pb-1">Due</th><th class="text-right font-medium pb-1">Amount</th></tr></thead>
+              <tbody>${invoiceRows}</tbody>
+            </table>
+          </div>
+
+          <div class="card p-5">
+            <h3 class="text-sm font-semibold mb-1">Test this case</h3>
+            <p class="text-xs text-[var(--text-muted)] mb-3">Preview is read-only — nothing is sent, no real payment link is created. Send now dispatches for real immediately, bypassing the wait timer (quiet hours too), so you can see a real email without waiting days.</p>
+            <div class="flex flex-wrap gap-2.5">
+              <button class="btn btn-secondary" data-action="preview">Preview next message</button>
+              <button class="btn btn-primary" style="background:var(--success)" data-action="send">Send now (test)</button>
+            </div>
+            <div data-role="test-result" class="mt-4"></div>
+
+            <div class="mt-4 pt-4 border-t border-[var(--border)]">
+              <h4 class="text-sm font-semibold mb-1">Force the case's current level</h4>
+              <p class="text-xs text-[var(--text-muted)] mb-3">A real dispatch always advances <em>past</em> whatever level is set here — so to make the next "Send now" actually place the voice call, set this to Skip level, then click Send now above. Setting it to Voice directly means the next dispatch will find voice already "done" and mark the case exhausted instead — useful for testing that outcome specifically.</p>
+              <div class="flex flex-wrap items-center gap-2.5">
+                <select data-role="level-select" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)]">
+                  <option value="spoc" ${data.level === 'spoc' ? 'selected' : ''}>Spoc</option>
+                  <option value="manager" ${data.level === 'manager' ? 'selected' : ''}>Manager</option>
+                  <option value="skip_level" ${data.level === 'skip_level' ? 'selected' : ''}>Skip level</option>
+                  <option value="voice" ${data.level === 'voice' ? 'selected' : ''}>Voice</option>
+                </select>
+                <button class="btn btn-secondary" data-action="set-level">Set level</button>
+              </div>
+              <div data-role="level-result" class="mt-3 text-sm"></div>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-[var(--border)]">
+              <h4 class="text-sm font-semibold mb-1">Test the voice call for this case</h4>
+              <p class="text-xs text-[var(--text-muted)] mb-3">Independent of the escalation level above — voice is normally only reached after the whole email chain is exhausted, so this lets you hear this specific customer's script now. Doesn't advance the case or touch its schedule.</p>
+              <div class="flex flex-wrap gap-2.5">
+                <button class="btn btn-secondary" data-action="voice-preview">Preview call script</button>
+                <button class="btn btn-primary" style="background:var(--success)" data-action="voice-call">Call now (test)</button>
+              </div>
+              <div data-role="voice-test-result" class="mt-4"></div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-sm font-semibold mb-3">Timeline (IST)</h3>
+            <div class="flex flex-col gap-2.5">${events}</div>
+          </div>
+        </div>`;
+    }
+
+    // Wires the Preview/Send-now buttons inside a rendered card. `root` is
+    // the element buildCaseCardHTML's output was injected into; `onSent` is
+    // called after a real send so the caller can refresh (reload page,
+    // re-fetch modal data, etc).
+    function wireCaseCardActions(root, caseId, onSent) {
+      const resultEl = root.querySelector('[data-role="test-result"]');
+
+      root.querySelector('[data-action="preview"]').addEventListener('click', async () => {
+        resultEl.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Loading preview…</div>';
+        const resp = await fetch(`/api/cases/${caseId}/preview`);
+        const data = await resp.json();
+        if (data.would === 'exhaust') {
+          resultEl.innerHTML = `<div class="card p-4 text-sm" style="border-color:var(--danger-border)"><strong>Would mark exhausted.</strong> ${data.detail}</div>`;
+          return;
+        }
+        const invoiceTable = (data.invoice_rows && data.invoice_rows.length) ? `
+          <table class="w-full text-xs mt-1">
+            <thead><tr class="text-[var(--text-muted)]"><th class="text-left font-medium pb-1">Invoice</th><th class="text-left font-medium pb-1">Due</th><th class="text-right font-medium pb-1">Amount</th></tr></thead>
+            <tbody>${data.invoice_rows.map(r => `
+              <tr class="border-t border-[var(--border)]">
+                <td class="py-1 num">${r.invoice_no}</td>
+                <td class="py-1">${r.due_date_display}</td>
+                <td class="py-1 text-right num">${r.amount_display}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>` : '';
+
+        resultEl.innerHTML = `
+          <div class="card p-4 text-sm flex flex-col gap-2" style="border-color:var(--accent)">
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
+              <span><strong class="text-[var(--text)]">Would send:</strong> ${data.level_name} via ${data.channel}</span>
+              <span>urgency ${data.urgency_score.toFixed(1)}</span>
+              <span>next wait ${data.wait_days}d</span>
+            </div>
+            <div><span class="text-[var(--text-muted)]">To:</span> <span class="num break-all">${data.to}</span>${data.cc ? ` <span class="text-[var(--text-muted)]">Cc:</span> <span class="num break-all">${data.cc}</span>` : ''}</div>
+            ${data.original_to ? `<div class="text-xs text-[var(--warning)]">Test override active — would really go to <span class="num break-all">${data.original_to}</span>${data.original_cc ? `, cc <span class="num break-all">${data.original_cc}</span>` : ''}</div>` : ''}
+            <div class="text-[var(--text-muted)]">Subject: ${data.subject}</div>
+            <pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px]">${data.body}</pre>
+            ${invoiceTable ? `<div class="text-xs text-[var(--text-muted)] mt-1">Email would also list every open invoice for this customer${data.would_include_pay_all ? `, with a separate "Pay everything" button alongside the per-invoice one` : ''}:</div>${invoiceTable}` : ''}
+            <div class="text-xs text-[var(--text-muted)]">${data.rationale}</div>
+          </div>`;
+      });
+
+      root.querySelector('[data-action="set-level"]').addEventListener('click', async (ev) => {
+        ev.target.disabled = true;
+        const levelResultEl = root.querySelector('[data-role="level-result"]');
+        const level = root.querySelector('[data-role="level-select"]').value;
+        levelResultEl.textContent = 'Setting…';
+        const resp = await fetch(`/api/cases/${caseId}/set-level`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ level }),
+        });
+        const data = await resp.json();
+        ev.target.disabled = false;
+        if (!resp.ok) {
+          levelResultEl.innerHTML = `<span class="text-[var(--danger)]">${data.detail || 'Failed to set level'}</span>`;
+          return;
+        }
+        levelResultEl.innerHTML = `<span class="text-[var(--success)]">Level set to ${data.level.replace('_',' ')}.</span>`;
+        if (onSent) setTimeout(() => onSent(), 800);
+      });
+
+      root.querySelector('[data-action="send"]').addEventListener('click', async (ev) => {
+        ev.target.disabled = true;
+        resultEl.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Sending…</div>';
+        const resp = await fetch(`/api/cases/${caseId}/dispatch-now`, { method: 'POST' });
+        const data = await resp.json();
+        resultEl.innerHTML = `<div class="text-sm">Outcome: <strong>${data.outcome}</strong></div>`;
+        if (onSent) setTimeout(() => onSent(), 800);
+      });
+
+      const voiceResultEl = root.querySelector('[data-role="voice-test-result"]');
+
+      root.querySelector('[data-action="voice-preview"]').addEventListener('click', async () => {
+        voiceResultEl.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Loading preview…</div>';
+        const resp = await fetch(`/api/cases/${caseId}/voice-preview`);
+        const data = await resp.json();
+        voiceResultEl.innerHTML = `
+          <div class="card p-4 text-sm flex flex-col gap-2" style="border-color:var(--accent)">
+            <div><span class="text-[var(--text-muted)]">Would call:</span> <span class="num break-all">${data.to}</span></div>
+            <pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px]">${data.body}</pre>
+          </div>`;
+      });
+
+      root.querySelector('[data-action="voice-call"]').addEventListener('click', async (ev) => {
+        ev.target.disabled = true;
+        voiceResultEl.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Calling…</div>';
+        const resp = await fetch(`/api/cases/${caseId}/voice-test`, { method: 'POST' });
+        const data = await resp.json();
+        const color = data.status === 'sent' ? 'var(--success)' : (data.status === 'logged' ? 'var(--text-muted)' : 'var(--danger)');
+        voiceResultEl.innerHTML = `
+          <div class="card p-4 text-sm flex flex-col gap-2">
+            <div><span class="text-[var(--text-muted)]">Called:</span> <span class="num break-all">${data.to}</span> — <span style="color:${color}"><strong>${data.status}</strong></span> ${data.detail || ''}</div>
+            <pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px]">${data.body}</pre>
+          </div>`;
+        ev.target.disabled = false;
+        if (onSent) setTimeout(() => onSent(), 800);
+      });
+    }
+  </script>
+</body>
+</html>
