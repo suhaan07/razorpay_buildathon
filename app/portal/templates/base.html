@@ -85,6 +85,7 @@
     .pill-closed { background: var(--success-soft); color: var(--success); }
     .pill-paused { background: var(--warning-soft); color: var(--warning); }
     .pill-exhausted { background: var(--danger-soft); color: var(--danger); }
+    .pill-disputed { background: var(--danger-soft); color: var(--danger); }
 
     table thead th {
       font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -103,11 +104,7 @@
         <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
         AI Revenue Recovery
       </div>
-      <a href="/" class="{{ 'active' if request.url.path == '/' }}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        Upload
-      </a>
-      <a href="/invoices" class="{{ 'active' if request.url.path == '/invoices' }}">
+      <a href="/invoices" class="{{ 'active' if request.url.path == '/invoices' or request.url.path == '/' }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
         Invoices
       </a>
@@ -118,6 +115,10 @@
       <a href="/report" class="{{ 'active' if request.url.path == '/report' }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Report
+      </a>
+      <a href="/chat" class="{{ 'active' if request.url.path == '/chat' }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Chat
       </a>
       <a href="/settings" class="{{ 'active' if request.url.path == '/settings' }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
@@ -147,6 +148,20 @@
           ${decision.rationale ? `<div class="text-sm">${decision.rationale}</div>` : ''}
         </div>` : '';
 
+      const promise = data.promise;
+      const PROMISE_STYLES = {
+        pending: 'background:var(--info-soft);color:var(--info)',
+        kept: 'background:var(--success-soft);color:var(--success)',
+        broken: 'background:var(--danger-soft);color:var(--danger)',
+        superseded: 'background:var(--surface-2);color:var(--text-muted)',
+      };
+      const promiseCard = promise ? `
+        <div class="card p-4 text-sm flex items-center gap-2 flex-wrap">
+          <span class="text-xs text-[var(--text-muted)]">Promise to pay:</span>
+          <span class="pill" style="${PROMISE_STYLES[promise.status] || PROMISE_STYLES.superseded}">${promise.status}</span>
+          <span>by <strong class="num">${promise.promised_date_display}</strong> <span class="text-xs text-[var(--text-muted)]">(${promise.source})</span></span>
+        </div>` : '';
+
       const invoiceRows = (data.other_invoices || []).map(inv => `
         <tr class="border-t border-[var(--border)] ${inv.is_this_case ? 'font-semibold' : ''}">
           <td class="py-1.5 num">${inv.invoice_no}${inv.is_this_case ? ' <span class="text-[var(--accent)] text-[11px] font-semibold">(this case)</span>' : ''}</td>
@@ -174,7 +189,10 @@
         <div class="flex flex-col gap-4">
           <div class="flex flex-wrap items-center gap-3">
             <h2 class="text-xl font-display font-extrabold">${data.customer}</h2>
-            <span class="pill pill-${data.status}">${data.status}</span>
+            ${data.disputed
+              ? `<span class="pill pill-disputed">disputed</span>`
+              : `<span class="pill pill-${data.status}">${data.status}</span>`}
+            ${(data.status === 'paused' || data.status === 'exhausted') ? `<button class="btn btn-secondary" data-action="reopen-case">Reopen case</button>` : ''}
           </div>
           <p class="text-sm text-[var(--text-muted)] -mt-3">Invoice <span class="num">${data.invoice_no}</span> &middot; ${data.bucket} &middot; <span class="num">${data.outstanding_display}</span> outstanding</p>
 
@@ -195,6 +213,7 @@
           </div>
 
           ${decisionCard}
+          ${promiseCard}
 
           ${(data.pay_link_url || data.pay_link_unavailable || data.consolidated_pay_link_url || data.consolidated_pay_link_unavailable) ? `
           <div class="card p-4 text-sm flex flex-col gap-2">
@@ -248,6 +267,27 @@
             </div>
 
             <div class="mt-4 pt-4 border-t border-[var(--border)]">
+              <h4 class="text-sm font-semibold mb-1">Log a promise to pay</h4>
+              <p class="text-xs text-[var(--text-muted)] mb-3">For a promise you got over a phone call rather than through WhatsApp. Applies to every open case for this customer, and pulls the next check-in to the day after this date — the AI's own schedule is overridden until it's kept or broken.</p>
+              <div class="flex flex-wrap items-center gap-2.5">
+                <input type="date" data-role="promise-date-input" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)]">
+                <button class="btn btn-secondary" data-action="log-promise">Log promise</button>
+              </div>
+              <div data-role="promise-result" class="mt-3 text-sm"></div>
+            </div>
+
+            ${data.status === 'open' ? `
+            <div class="mt-4 pt-4 border-t border-[var(--border)]">
+              <h4 class="text-sm font-semibold mb-1">Flag as disputed</h4>
+              <p class="text-xs text-[var(--text-muted)] mb-3">For a dispute raised over a phone call rather than through WhatsApp — wrong invoice, already paid another way, etc. Pauses every open case for this customer immediately, pending review; nothing auto-escalates until it's reopened.</p>
+              <div class="flex flex-wrap items-center gap-2.5">
+                <input type="text" data-role="dispute-reason-input" placeholder="Reason (optional)" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)] flex-1 min-w-[220px]">
+                <button class="btn btn-secondary" style="color:var(--danger);border-color:var(--danger-border)" data-action="log-dispute">Flag as disputed</button>
+              </div>
+              <div data-role="dispute-result" class="mt-3 text-sm"></div>
+            </div>` : ''}
+
+            <div class="mt-4 pt-4 border-t border-[var(--border)]">
               <h4 class="text-sm font-semibold mb-1">Test the voice call for this case</h4>
               <p class="text-xs text-[var(--text-muted)] mb-3">Independent of the escalation level above — voice is normally only reached after the whole email chain is exhausted, so this lets you hear this specific customer's script now. Doesn't advance the case or touch its schedule.</p>
               <div class="flex flex-wrap gap-2.5">
@@ -271,6 +311,16 @@
     // re-fetch modal data, etc).
     function wireCaseCardActions(root, caseId, onSent) {
       const resultEl = root.querySelector('[data-role="test-result"]');
+
+      const reopenBtn = root.querySelector('[data-action="reopen-case"]');
+      if (reopenBtn) {
+        reopenBtn.addEventListener('click', async (ev) => {
+          ev.target.disabled = true;
+          const resp = await fetch(`/api/cases/${caseId}/reopen`, { method: 'POST' });
+          if (resp.ok && onSent) setTimeout(() => onSent(), 400);
+          else ev.target.disabled = false;
+        });
+      }
 
       root.querySelector('[data-action="preview"]').addEventListener('click', async () => {
         resultEl.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Loading preview…</div>';
@@ -327,6 +377,53 @@
         levelResultEl.innerHTML = `<span class="text-[var(--success)]">Level set to ${data.level.replace('_',' ')}.</span>`;
         if (onSent) setTimeout(() => onSent(), 800);
       });
+
+      root.querySelector('[data-action="log-promise"]').addEventListener('click', async (ev) => {
+        const promiseResultEl = root.querySelector('[data-role="promise-result"]');
+        const promisedDate = root.querySelector('[data-role="promise-date-input"]').value;
+        if (!promisedDate) {
+          promiseResultEl.innerHTML = `<span class="text-[var(--danger)]">Pick a date first.</span>`;
+          return;
+        }
+        ev.target.disabled = true;
+        promiseResultEl.textContent = 'Logging…';
+        const resp = await fetch(`/api/cases/${caseId}/promise`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ promised_date: promisedDate }),
+        });
+        const data = await resp.json();
+        ev.target.disabled = false;
+        if (!resp.ok) {
+          promiseResultEl.innerHTML = `<span class="text-[var(--danger)]">${data.detail || 'Failed to log promise'}</span>`;
+          return;
+        }
+        promiseResultEl.innerHTML = `<span class="text-[var(--success)]">Promise logged for ${promisedDate}.</span>`;
+        if (onSent) setTimeout(() => onSent(), 800);
+      });
+
+      const logDisputeBtn = root.querySelector('[data-action="log-dispute"]');
+      if (logDisputeBtn) {
+        logDisputeBtn.addEventListener('click', async (ev) => {
+          const disputeResultEl = root.querySelector('[data-role="dispute-result"]');
+          const reason = root.querySelector('[data-role="dispute-reason-input"]').value.trim();
+          ev.target.disabled = true;
+          disputeResultEl.textContent = 'Flagging…';
+          const resp = await fetch(`/api/cases/${caseId}/dispute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason || null }),
+          });
+          const data = await resp.json();
+          ev.target.disabled = false;
+          if (!resp.ok) {
+            disputeResultEl.innerHTML = `<span class="text-[var(--danger)]">${data.detail || 'Failed to flag dispute'}</span>`;
+            return;
+          }
+          disputeResultEl.innerHTML = `<span class="text-[var(--success)]">Paused ${data.cases_paused} case(s) pending review.</span>`;
+          if (onSent) setTimeout(() => onSent(), 800);
+        });
+      }
 
       root.querySelector('[data-action="send"]').addEventListener('click', async (ev) => {
         ev.target.disabled = true;

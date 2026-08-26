@@ -37,6 +37,29 @@
   </div>
 
   <div>
+    <h2 class="text-sm font-semibold mb-1">Cash flow forecast</h2>
+    <p class="text-xs text-[var(--text-muted)] mb-3">When each outstanding invoice is predicted to actually get paid — due date plus that customer's historical average lateness, or their active promise-to-pay date when they have one. No ML — a live heuristic over data you already have.</p>
+    {% set bucket_colors = {'overdue': 'var(--danger)', 'this_week': 'var(--success)', 'next_week': 'var(--info)', 'week_3_4': 'var(--warning)', 'beyond_30': 'var(--text-muted)'} %}
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      {% for b in forecast.buckets %}
+      <div class="card p-3.5">
+        <div class="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] mb-1.5 font-medium">
+          <span class="w-1.5 h-1.5 rounded-full" style="background:{{ bucket_colors[b.key] }}"></span>{{ b.label }}
+        </div>
+        <div class="text-lg font-display font-bold num">{{ format_inr(b.total_amount) }}</div>
+        <div class="text-[11px] text-[var(--text-muted)] num mt-0.5">{{ b.count }} invoice{{ '' if b.count == 1 else 's' }}</div>
+        {% if b.low_confidence_amount > 0 %}
+        <div class="text-[11px] text-[var(--warning)] num mt-0.5">{{ format_inr(b.low_confidence_amount) }} low-confidence (no payment history)</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if forecast.no_due_date_count > 0 %}
+    <div class="text-xs text-[var(--text-muted)] mt-2">Plus {{ format_inr(forecast.no_due_date_amount) }} across {{ forecast.no_due_date_count }} invoice{{ '' if forecast.no_due_date_count == 1 else 's' }} with no due date on file — can't be forecast.</div>
+    {% endif %}
+  </div>
+
+  <div>
     <h2 class="text-sm font-semibold mb-3">Exceptions — exhausted, unpaid despite the full chain</h2>
     <div class="card overflow-x-auto">
       <table class="w-full text-sm min-w-[560px]">

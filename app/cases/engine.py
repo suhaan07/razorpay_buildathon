@@ -25,7 +25,7 @@ from app.cases import compliance
 from app.channels.email_template import build_escalation_html
 from app.channels.registry import get_channel
 from app.data.ageing import bucket_for, days_overdue
-from app.data.models import Case, CaseEvent, Customer, Invoice, ReliabilityScore, Settings
+from app.data.models import Case, CaseEvent, Customer, Invoice, PromiseToPay, ReliabilityScore, Settings
 from app.decisions.decision_layer import LEVEL_NAMES, decide
 from app.integrations.razorpay_client import create_payment_link, is_oversized_stub
 from app.playbooks.loader import get_playbook
@@ -47,6 +47,97 @@ def get_settings(session: Session) -> Settings:
         session.add(settings)
         session.commit()
     return settings
+
+
+def record_promise(
+    session: Session,
+    customer: Customer,
+    promised_date: dt.date,
+    *,
+    source: str,
+    raw_text: str | None = None,
+) -> PromiseToPay:
+    """A newer promise supersedes any still-pending one for this customer —
+    only ever one active promise at a time (a renegotiated date isn't a
+    broken one). Pulls next_action_at on every currently open case for this
+    customer to the day AFTER the promised date, giving them the full
+    promised day to pay before the next check — overriding whatever the
+    AI's own wait_days had scheduled, since a stated commitment is a
+    stronger signal than the mechanical schedule. Doesn't dispatch
+    anything itself."""
+
+    still_pending = (
+        session.query(PromiseToPay)
+        .filter(PromiseToPay.customer_id == customer.id, PromiseToPay.status == "pending")
+        .all()
+    )
+    for old in still_pending:
+        old.status = "superseded"
+        old.resolved_at = dt.datetime.utcnow()
+
+    promise = PromiseToPay(customer_id=customer.id, promised_date=promised_date, source=source, raw_text=raw_text)
+    session.add(promise)
+    session.flush()
+
+    check_at = dt.datetime.combine(promised_date + dt.timedelta(days=1), dt.time.min)
+    open_cases = session.query(Case).filter(Case.customer_id == customer.id, Case.status == "open").all()
+    for case in open_cases:
+        case.next_action_at = check_at
+        record_event(
+            session, case, type="system",
+            payload={"reason": "promise_recorded", "promised_date": promised_date.isoformat(), "source": source},
+        )
+
+    session.commit()
+    return promise
+
+
+def resolve_promises(session: Session, today: dt.date | None = None) -> list[PromiseToPay]:
+    """Called at the top of every batch run (sync_cases/reliability scores
+    also always run there regardless of state, same pattern). A pending
+    promise resolves to "kept" the moment the customer's total outstanding
+    hits zero (checked immediately on payment too — see the webhook
+    handler's resolve_promises_for_customer call, so a kept promise doesn't
+    have to wait for the next batch run to show as resolved) or to "broken"
+    once its date has passed with something still owed.
+
+    Returns the promises newly resolved to "broken" in THIS call — used by
+    run_batch() for the proactive ops digest (app/notifications.py), so a
+    promise that's been broken for a week doesn't get re-reported on every
+    subsequent run, only the run where it actually flipped."""
+
+    today = today or dt.date.today()
+    pending = session.query(PromiseToPay).filter(PromiseToPay.status == "pending").all()
+    newly_broken = []
+    for promise in pending:
+        _resolve_one_promise(session, promise, today)
+        if promise.status == "broken":
+            newly_broken.append(promise)
+    session.commit()
+    return newly_broken
+
+
+def resolve_promises_for_customer(session: Session, customer_id: int, today: dt.date | None = None) -> None:
+    today = today or dt.date.today()
+    pending = (
+        session.query(PromiseToPay)
+        .filter(PromiseToPay.customer_id == customer_id, PromiseToPay.status == "pending")
+        .all()
+    )
+    for promise in pending:
+        _resolve_one_promise(session, promise, today)
+    session.commit()
+
+
+def _resolve_one_promise(session: Session, promise: PromiseToPay, today: dt.date) -> None:
+    customer = session.get(Customer, promise.customer_id)
+    total_outstanding = sum(inv.outstanding for inv in customer.invoices) if customer else 0.0
+    if total_outstanding <= 0:
+        promise.status = "kept"
+        promise.resolved_at = dt.datetime.utcnow()
+    elif promise.promised_date < today:
+        promise.status = "broken"
+        promise.resolved_at = dt.datetime.utcnow()
 
 
 def record_event(
@@ -119,6 +210,11 @@ def _build_case_context(session: Session, case: Case, today: dt.date) -> dict:
     customer: Customer = case.customer
     score: ReliabilityScore | None = session.get(ReliabilityScore, customer.id)
     customer_outstanding = sum(inv.outstanding for inv in customer.invoices)
+    broken_promise_count = (
+        session.query(PromiseToPay)
+        .filter(PromiseToPay.customer_id == customer.id, PromiseToPay.status == "broken")
+        .count()
+    )
 
     return {
         "case_id": case.id,
@@ -129,6 +225,7 @@ def _build_case_context(session: Session, case: Case, today: dt.date) -> dict:
         "avg_days_late": score.avg_days_late if score else 0.0,
         "outstanding_amount": invoice.outstanding,
         "touch_count": case.touch_count,
+        "broken_promise_count": broken_promise_count,
         "customer_name": customer.name,
         "invoice_no": invoice.invoice_no,
         "amount": format_inr(invoice.outstanding),
@@ -181,25 +278,34 @@ def _customer_invoice_rows(customer: Customer) -> list[dict]:
     ]
 
 
+def get_or_create_case_payment_link(session: Session, case: Case) -> dict:
+    """Reused across every level of a case (and now the chatbot's
+    "generate a link" tool too), not recreated per call — Razorpay's
+    reference_id (the invoice number) must be unique per account, so
+    calling create_payment_link() again for the same case always fails
+    on the second call onward. Returns {"id", "short_url", "stub"}."""
+    invoice: Invoice = case.invoice
+    customer: Customer = case.customer
+
+    if case.pay_link_id and case.pay_link_url:
+        return {"id": case.pay_link_id, "short_url": case.pay_link_url, "stub": case.pay_link_id.startswith("stub_")}
+
+    link = create_payment_link(
+        amount_rupees=invoice.outstanding,
+        invoice_no=invoice.invoice_no,
+        customer_name=customer.name,
+        description=f"Invoice {invoice.invoice_no}",
+    )
+    case.pay_link_id, case.pay_link_url = link["id"], link["short_url"]
+    record_event(session, case, type="system", payload={"pay_link_id": link["id"], "stub": link["stub"]})
+    return link
+
+
 def _dispatch_level(session: Session, case: Case, playbook: dict, level: dict, ctx: dict, wait_days: int, now: dt.datetime) -> None:
     invoice: Invoice = case.invoice
     customer: Customer = case.customer
 
-    # Reused across every level of this case, not recreated per dispatch —
-    # Razorpay's reference_id (the invoice number) must be unique per
-    # account, so calling create_payment_link() again for the same case
-    # would always fail on the second escalation onward.
-    if case.pay_link_id and case.pay_link_url:
-        link = {"id": case.pay_link_id, "short_url": case.pay_link_url, "stub": case.pay_link_id.startswith("stub_")}
-    else:
-        link = create_payment_link(
-            amount_rupees=invoice.outstanding,
-            invoice_no=invoice.invoice_no,
-            customer_name=customer.name,
-            description=f"Invoice {invoice.invoice_no}",
-        )
-        case.pay_link_id, case.pay_link_url = link["id"], link["short_url"]
-        record_event(session, case, type="system", payload={"pay_link_id": link["id"], "stub": link["stub"]})
+    link = get_or_create_case_payment_link(session, case)
 
     # An "amount exceeds Razorpay's max" stub (see razorpay_client.py) must
     # never be shown as if it were a working link — clicking it does
@@ -304,12 +410,24 @@ def _process_one_case(session: Session, case: Case, playbook: dict, now: dt.date
         return "failed"
 
 
+def _send_digest_if_anything_new(session: Session, newly_broken_promises: list[PromiseToPay], newly_exhausted_cases: list[Case]) -> None:
+    if not newly_broken_promises and not newly_exhausted_cases:
+        return  # the common case — nothing new, stay silent, no import/call overhead
+    from app.notifications import send_ops_digest
+
+    send_ops_digest(
+        broken_promise_customer_names=[p.customer.name for p in newly_broken_promises],
+        exhausted_case_summaries=[f"{c.customer.name} ({c.invoice.invoice_no})" for c in newly_exhausted_cases],
+    )
+
+
 def run_batch(session: Session, now: dt.datetime | None = None) -> dict:
     now = now or dt.datetime.utcnow()
     today = now.date()
 
     sync_cases(session, today)
     refresh_all_reliability_scores(session)
+    newly_broken_promises = resolve_promises(session, today)
 
     if get_settings(session).auto_dispatch_paused:
         # Neither of the above touches Razorpay or sends anything, so they
@@ -318,10 +436,14 @@ def run_batch(session: Session, now: dt.datetime | None = None) -> dict:
         # gated. force_dispatch_case() (the per-case "Send now (test)"
         # button) deliberately does NOT check this — a human explicitly
         # asking to send one case is not what this switch guards against.
+        # Broken promises are still worth a digest even while paused —
+        # they're discovered by time passing, not by dispatching anything.
+        _send_digest_if_anything_new(session, newly_broken_promises, [])
         return {"processed": 0, "dispatched": 0, "paused": 0, "exhausted": 0, "failed": 0, "auto_dispatch_paused": True}
 
     playbook = get_playbook(PLAYBOOK_NAME)
     processed, dispatched, paused, exhausted, failed = 0, 0, 0, 0, 0
+    newly_exhausted_cases: list[Case] = []
 
     for case in due_cases(session, now):
         processed += 1
@@ -344,9 +466,11 @@ def run_batch(session: Session, now: dt.datetime | None = None) -> dict:
             dispatched += 1
         elif outcome == "exhausted":
             exhausted += 1
+            newly_exhausted_cases.append(case)
         elif outcome == "failed":
             failed += 1
 
+    _send_digest_if_anything_new(session, newly_broken_promises, newly_exhausted_cases)
     return {"processed": processed, "dispatched": dispatched, "paused": paused, "exhausted": exhausted, "failed": failed}
 
 
@@ -461,29 +585,78 @@ def pause_case(session: Session, case: Case, *, reason: str) -> None:
     record_event(session, case, type="system", payload={"reason": reason})
 
 
-def render_sample_message(channel_name: str) -> dict:
-    """A representative message for the given channel, built from
-    placeholder data — decoupled from any real case, purely to verify a
-    channel integration (does Twilio Voice actually work, what does it
-    sound like) without touching real case state or credentials."""
-    playbook = get_playbook(PLAYBOOK_NAME)
-    level = next((lvl for lvl in playbook["levels"] if lvl["channel"] == channel_name), None)
-    if level is None:
-        raise KeyError(f"no playbook level uses channel {channel_name!r}")
+def flag_dispute(session: Session, customer: Customer, reason: str | None) -> list[Case]:
+    """A dispute (wrong invoice, already paid via another channel, etc.)
+    must stop the automated chain immediately for every open case this
+    customer has — not wait for the next batch run, and not just one
+    invoice, since the person raising it is usually talking about their
+    account generally. Distinguishable from an ordinary max-touch pause by
+    CaseEvent payload reason="disputed" (see _build_case_detail)."""
+    open_cases = session.query(Case).filter(Case.customer_id == customer.id, Case.status == "open").all()
+    for case in open_cases:
+        case.status = "paused"
+        case.next_action_at = None
+        record_event(session, case, type="system", payload={"reason": "disputed", "detail": reason})
+    session.commit()
+    return open_cases
 
-    sample_ctx = {
-        "customer_name": "Sample Customer Pvt Ltd",
-        "invoice_no": "INV-TEST-001",
-        "amount": format_inr(50_000.0),
-        "customer_outstanding": format_inr(50_000.0),
-        "days_overdue": 45,
-        "spoc_name": "Sample SPOC",
-        "manager_name": "Sample Manager",
-        "skip_level_name": "Sample Skip-level",
-        "pay_link": "https://rzp.io/l/sample-test-link",
-    }
-    body = render(level["message"], sample_ctx)
-    return {"channel": channel_name, "body": body, "recipients_role": level["recipients"]}
+
+def reopen_case(session: Session, case: Case) -> None:
+    """Resumes a case that's currently paused OR exhausted.
+
+    touch_count always resets to 0 — leaving it as-is would mean a case
+    paused for hitting the max-touch cap instantly re-pauses itself the
+    moment it becomes due again, making "reopen" a no-op for exactly the
+    case it's most obviously meant to handle.
+
+    A paused case (dispute resolved as invalid, or a manually-lifted
+    max-touch pause) resumes from wherever its escalation had gotten to —
+    being paused didn't invalidate that progress, so level_index and
+    playbook_name are left alone. An EXHAUSTED case is different: it's
+    already sitting at the mechanical "voice done, still unpaid" terminal
+    check in _process_one_case (level_index >= VOICE_LEVEL_INDEX), so
+    resuming with that unchanged would just re-exhaust it on the very next
+    batch run without ever actually trying again — it gets a genuinely
+    fresh start instead (level_index/playbook_name cleared, so the AI
+    re-decides a level from current signals), and its stale close_reason/
+    closed_at are cleared since it's no longer closed in any sense."""
+    was_exhausted = case.status == "exhausted"
+    case.status = "open"
+    case.next_action_at = None
+    case.touch_count = 0
+    if was_exhausted:
+        case.level_index = 0
+        case.playbook_name = None
+        case.close_reason = None
+        case.closed_at = None
+    record_event(session, case, type="system", payload={"reason": "reopened", "from_status": "exhausted" if was_exhausted else "paused"})
+    session.commit()
+
+
+def get_pause_info(case: Case) -> dict | None:
+    """Why (and since when) a paused case was paused, from the most recent
+    system event carrying a "reason" — {"reason": "disputed", "detail":
+    "...", "at": <datetime>} or {"reason": "max_touch_cap_reached", ...}.
+    None if the case isn't currently paused. Powers both the disputed
+    badge and the Cases page's "Needs review" queue."""
+    if case.status != "paused":
+        return None
+    system_events = sorted(
+        (e for e in case.events if e.type == "system" and e.payload and "reason" in e.payload),
+        key=lambda e: e.created_at, reverse=True,
+    )
+    if not system_events:
+        return {"reason": None, "detail": None, "at": None}
+    latest = system_events[0]
+    return {"reason": latest.payload.get("reason"), "detail": latest.payload.get("detail"), "at": latest.created_at}
+
+
+def is_disputed(case: Case) -> bool:
+    """True if this case's most recent pause was a dispute flag, not an
+    ordinary max-touch pause — used to render a distinct badge rather than
+    a generic "paused" one."""
+    info = get_pause_info(case)
+    return info is not None and info["reason"] == "disputed"
 
 
 def _voice_message_for_case(session: Session, case: Case, today: dt.date) -> tuple[str, str]:

@@ -56,3 +56,27 @@ def test_decide_combined_signals_tip_a_mid_bucket_case_to_manager():
     # none of these alone crosses the manager threshold, but combined they do
     result = decide(_ctx(bucket="16-30", score=40, outstanding=350_000.0, touch_count=4))
     assert result.suggested_level >= 1
+
+
+def test_broken_promise_count_increases_urgency():
+    calm = decide(_ctx(bucket="16-30", score=100, broken_promise_count=0))
+    with_broken = decide(_ctx(bucket="16-30", score=100, broken_promise_count=1))
+    assert with_broken.urgency_score > calm.urgency_score
+    assert "broken_promise_bonus" in with_broken.rationale
+
+
+def test_broken_promise_bonus_caps_and_does_not_appear_when_zero():
+    zero = decide(_ctx(broken_promise_count=0))
+    assert "broken_promise_bonus" not in zero.rationale
+
+    at_cap = decide(_ctx(bucket="0-15", score=100, broken_promise_count=3))
+    beyond_cap = decide(_ctx(bucket="0-15", score=100, broken_promise_count=10))
+    assert at_cap.urgency_score == beyond_cap.urgency_score  # capped, doesn't keep climbing
+
+
+def test_broken_promises_alone_can_tip_a_calm_case_to_manager():
+    calm = decide(_ctx(bucket="16-30", score=100, broken_promise_count=0))
+    assert calm.suggested_level == 0
+
+    repeat_offender = decide(_ctx(bucket="16-30", score=100, broken_promise_count=3))
+    assert repeat_offender.suggested_level >= 1

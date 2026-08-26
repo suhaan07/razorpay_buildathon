@@ -34,8 +34,10 @@ BUCKET_SEVERITY = {
 RELIABILITY_BONUS_MAX = float(os.getenv("URGENCY_RELIABILITY_BONUS_MAX", "25"))
 MATERIALITY_BONUS_MAX = float(os.getenv("URGENCY_MATERIALITY_BONUS_MAX", "10"))
 TOUCH_BONUS_MAX = float(os.getenv("URGENCY_TOUCH_BONUS_MAX", "10"))
+BROKEN_PROMISE_BONUS_MAX = float(os.getenv("URGENCY_BROKEN_PROMISE_BONUS_MAX", "15"))
 LARGE_INVOICE_THRESHOLD = float(os.getenv("LARGE_INVOICE_THRESHOLD", "300000"))
 TOUCH_CAP_FOR_SCORING = float(os.getenv("URGENCY_TOUCH_CAP_FOR_SCORING", "5"))
+BROKEN_PROMISE_CAP_FOR_SCORING = float(os.getenv("URGENCY_BROKEN_PROMISE_CAP_FOR_SCORING", "3"))
 
 MANAGER_THRESHOLD = float(os.getenv("URGENCY_MANAGER_THRESHOLD", "35"))
 SKIP_LEVEL_THRESHOLD = float(os.getenv("URGENCY_SKIP_LEVEL_THRESHOLD", "60"))
@@ -68,7 +70,10 @@ def decide(case_context: dict) -> DecisionResult:
     touch_count = case_context.get("touch_count", 0)
     touch_bonus = min(touch_count / TOUCH_CAP_FOR_SCORING, 1.0) * TOUCH_BONUS_MAX
 
-    urgency = _clip(bucket_severity + reliability_bonus + materiality_bonus + touch_bonus)
+    broken_promise_count = case_context.get("broken_promise_count", 0)
+    broken_promise_bonus = min(broken_promise_count / BROKEN_PROMISE_CAP_FOR_SCORING, 1.0) * BROKEN_PROMISE_BONUS_MAX
+
+    urgency = _clip(bucket_severity + reliability_bonus + materiality_bonus + touch_bonus + broken_promise_bonus)
 
     if urgency >= SKIP_LEVEL_THRESHOLD:
         suggested_level = 2
@@ -81,11 +86,14 @@ def decide(case_context: dict) -> DecisionResult:
     wait_days = round(MAX_WAIT_DAYS - (urgency / 100.0) * span)
     wait_days = max(MIN_WAIT_DAYS, min(MAX_WAIT_DAYS, wait_days))
 
+    broken_promise_note = (
+        f" + broken_promise_bonus={broken_promise_bonus:.1f} (broken={broken_promise_count})" if broken_promise_count else ""
+    )
     rationale = (
         f"urgency={urgency:.1f} = bucket[{case_context['bucket']}]={bucket_severity:.0f} + "
         f"reliability_bonus={reliability_bonus:.1f} (score={reliability_score:.0f}) + "
         f"materiality_bonus={materiality_bonus:.1f} (outstanding={outstanding:.0f}) + "
-        f"touch_bonus={touch_bonus:.1f} (touches={touch_count}) "
+        f"touch_bonus={touch_bonus:.1f} (touches={touch_count}){broken_promise_note} "
         f"-> suggested_level={LEVEL_NAMES[suggested_level]}, wait_days={wait_days}"
     )
     return DecisionResult(suggested_level=suggested_level, wait_days=wait_days, urgency_score=urgency, rationale=rationale)

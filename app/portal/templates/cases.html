@@ -2,12 +2,64 @@
 {% block title %}Cases — AI Revenue Recovery{% endblock %}
 {% block content %}
 <div class="flex flex-col gap-5">
-  <div>
-    <h1 class="text-2xl font-display font-extrabold">Cases</h1>
-    <p class="text-sm text-[var(--text-muted)] mt-1">Click a row for its full decision + dispatch timeline, and to preview or force-send its next message.</p>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-display font-extrabold">Cases</h1>
+      <p class="text-sm text-[var(--text-muted)] mt-1">
+        {% if view == 'needs_review' %}
+          Paused cases waiting on a human decision — a dispute flag, or an automatic max-touch pause. Reopen to resume normal escalation.
+        {% else %}
+          Click a row for its full decision + dispatch timeline, and to preview or force-send its next message.
+        {% endif %}
+      </p>
+    </div>
+    <a href="/api/cases/export.csv" class="btn btn-secondary">Export CSV</a>
+  </div>
+
+  <div class="flex gap-2">
+    <a href="/cases" class="btn {{ 'btn-primary' if view != 'needs_review' else 'btn-secondary' }}">All Cases</a>
+    <a href="/cases?view=needs_review" class="btn {{ 'btn-primary' if view == 'needs_review' else 'btn-secondary' }}" style="{{ 'background:var(--danger)' if view == 'needs_review' and needs_review_count else '' }}">
+      Needs Review{{ ' (' ~ needs_review_count ~ ')' if needs_review_count else '' }}
+    </a>
   </div>
 
   <div class="card overflow-x-auto">
+    {% if view == 'needs_review' %}
+    <table class="w-full text-sm min-w-[760px]">
+      <thead>
+        <tr>
+          <th class="p-3 text-left">Customer</th>
+          <th class="p-3 text-left">Invoice</th>
+          <th class="p-3 text-left">Reason</th>
+          <th class="p-3 text-left">Detail</th>
+          <th class="p-3 text-left">Since (IST)</th>
+          <th class="p-3 text-right">Outstanding</th>
+          <th class="p-3 text-right">Reopen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cases %}
+        <tr class="cursor-pointer" onclick="openCaseModal({{ c.id }})" data-row-id="case-row-{{ c.id }}" id="case-row-{{ c.id }}">
+          <td class="p-3">{{ c.customer }}</td>
+          <td class="p-3 num">{{ c.invoice_no }}</td>
+          <td class="p-3">
+            {% if c.disputed %}<span class="pill pill-disputed">disputed</span>
+            {% elif c.pause_reason == 'exhausted' %}<span class="pill pill-exhausted">exhausted</span>
+            {% else %}<span class="pill" style="background:var(--warning-soft);color:var(--warning)">{{ c.pause_reason or 'paused' }}</span>{% endif %}
+          </td>
+          <td class="p-3 text-[var(--text-muted)]">{{ c.pause_detail or '—' }}</td>
+          <td class="p-3 num text-[var(--text-muted)]">{{ c.paused_at_display or '—' }}</td>
+          <td class="p-3 text-right num">{{ c.outstanding }}</td>
+          <td class="p-3 text-right">
+            <button class="btn btn-secondary" onclick="event.stopPropagation(); reopenFromList({{ c.id }})">Reopen</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td class="p-6 text-center text-[var(--text-muted)]" colspan="7">Nothing needs review right now.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
     <table class="w-full text-sm min-w-[760px]">
       <thead>
         <tr>
@@ -28,7 +80,7 @@
           <td class="p-3 num">{{ c.invoice_no }}</td>
           <td class="p-3">{{ c.bucket }}</td>
           <td class="p-3">
-            <span class="pill pill-{{ c.status }}">{{ c.status }}</span>
+            {% if c.disputed %}<span class="pill pill-disputed">disputed</span>{% else %}<span class="pill pill-{{ c.status }}">{{ c.status }}</span>{% endif %}
           </td>
           <td class="p-3 capitalize">{{ c.level.replace('_', ' ') }}</td>
           <td class="p-3 text-right num">{{ c.outstanding }}</td>
@@ -40,6 +92,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
   </div>
 </div>
 
@@ -79,5 +132,15 @@ function closeCaseModal() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && currentModalCaseId !== null) closeCaseModal();
 });
+
+async function reopenFromList(caseId) {
+  const row = document.getElementById(`case-row-${caseId}`);
+  const resp = await fetch(`/api/cases/${caseId}/reopen`, { method: 'POST' });
+  if (resp.ok && row) {
+    row.style.opacity = '0.4';
+    row.style.pointerEvents = 'none';
+    setTimeout(() => window.location.reload(), 300);
+  }
+}
 </script>
 {% endblock %}

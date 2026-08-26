@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz, process
+from sqlalchemy.orm import Session
+
+from app.data.models import Customer
 
 MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "72"))
 MATCH_AMBIGUITY_GAP = float(os.getenv("MATCH_AMBIGUITY_GAP", "5"))
@@ -63,3 +66,24 @@ def resolve(query: str, candidate_names: list[str]) -> ResolveResult:
         return ResolveResult(status="ambiguous", candidates=close)
 
     return ResolveResult(status="matched", customer_name=scored[0][2])
+
+
+@dataclass
+class CustomerLookup:
+    status: str  # matched | ambiguous | not_found
+    customer: Customer | None = None
+    candidates: list[str] = field(default_factory=list)
+
+
+def resolve_customer(session: Session, name_query: str) -> CustomerLookup:
+    """DB-aware counterpart to resolve() — matches name_query against every
+    Customer row and returns the ORM object directly, so callers don't each
+    reimplement the query-all/match/look-up-by-name dance."""
+    all_customers = session.query(Customer).all()
+    match = resolve(name_query, [c.name for c in all_customers])
+    if match.status == "not_found":
+        return CustomerLookup(status="not_found")
+    if match.status == "ambiguous":
+        return CustomerLookup(status="ambiguous", candidates=match.candidates or [])
+    customer = next(c for c in all_customers if c.name == match.customer_name)
+    return CustomerLookup(status="matched", customer=customer)

@@ -38,6 +38,12 @@
           {{ 'configured' if sendgrid_configured else 'not configured (log-only)' }}
         </span>
       </div>
+      <div class="card p-3.5">
+        <div class="text-xs text-[var(--text-muted)] mb-1">Chatbot (Anthropic)</div>
+        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if anthropic_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
+          {{ 'configured' if anthropic_configured else 'not configured' }}
+        </span>
+      </div>
     </div>
   </div>
 

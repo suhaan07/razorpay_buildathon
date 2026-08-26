@@ -4,33 +4,38 @@ import datetime as dt
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.cases.engine import (
+    flag_dispute,
     force_dispatch_case,
+    get_pause_info,
     get_settings,
+    is_disputed,
     preview_next_message,
     preview_voice_call,
-    render_sample_message,
+    record_promise,
+    reopen_case,
     run_batch,
     send_voice_call_test,
     set_case_level,
     sync_cases,
 )
-from app.channels.registry import get_channel
+from app.chatbot import agent as chatbot_agent
 from app.data.ageing import bucket_for
 from app.data.ingest import IngestError, ingest_xlsx
-from app.data.models import Case, Customer, Invoice, ReliabilityScore
+from app.data.models import Case, Invoice, PromiseToPay, ReliabilityScore
 from app.db import get_session
 from app.decisions.decision_layer import LEVEL_NAMES
 from app.integrations import razorpay_client, twilio_client
 from app.integrations.razorpay_client import is_oversized_stub
 from app.playbooks.loader import get_registry
 from app.reports.batch_report import build_report
+from app.reports.cash_flow_forecast import build_cash_flow_forecast
 from app.reports.format_utils import format_date, format_inr, format_ist
 
 router = APIRouter()
@@ -88,6 +93,13 @@ def _build_case_detail(session: Session, case: Case) -> dict:
     sorted_events = sorted(case.events, key=lambda e: e.created_at, reverse=True)
     last_decision = next((e for e in sorted_events if e.type == "decision"), None)
 
+    latest_promise = (
+        session.query(PromiseToPay)
+        .filter(PromiseToPay.customer_id == customer.id)
+        .order_by(PromiseToPay.created_at.desc())
+        .first()
+    )
+
     events = [
         {
             "type": e.type,
@@ -104,6 +116,7 @@ def _build_case_detail(session: Session, case: Case) -> dict:
         "customer": customer.name,
         "invoice_no": invoice.invoice_no,
         "status": case.status,
+        "disputed": is_disputed(case),
         "bucket": case.bucket,
         "outstanding_display": format_inr(invoice.outstanding),
         "level": LEVEL_NAMES[case.level_index] if case.playbook_name else None,
@@ -138,20 +151,19 @@ def _build_case_detail(session: Session, case: Case) -> dict:
         } if last_decision else None,
         "other_invoices": invoice_rows,
         "events": events,
+        "promise": {
+            "status": latest_promise.status,
+            "promised_date_display": format_date(latest_promise.promised_date),
+            "source": latest_promise.source,
+        } if latest_promise else None,
     }
 
 
-@router.get("/", response_class=HTMLResponse)
-def upload_page(request: Request, session: Session = Depends(get_session)):
-    return templates.TemplateResponse(
-        "upload.html",
-        {
-            "request": request,
-            "customer_count": session.query(Customer).count(),
-            "invoice_count": session.query(Invoice).count(),
-            "auto_dispatch_paused": get_settings(session).auto_dispatch_paused,
-        },
-    )
+@router.get("/")
+def root_redirect():
+    # Upload + Run batch now live at the top of the Invoices page (see
+    # invoices_page below) — no more standalone Upload page.
+    return RedirectResponse(url="/invoices")
 
 
 @router.post("/upload")
@@ -217,12 +229,42 @@ def api_invoices(tab: str = "All", q: str | None = None, session: Session = Depe
     }
 
 
+_NEEDS_REVIEW_STATUSES = ("paused", "exhausted")
+
+
+def _review_info(case: Case) -> dict:
+    """Unifies paused-case pause info and exhausted-case "why" into the
+    same shape, for the Needs Review queue — a case that ran out the full
+    escalation chain unpaid needs a human just as much as a disputed one
+    does, even though it's a different status and reaches this state a
+    different way."""
+    if case.status == "exhausted":
+        return {
+            "reason": "exhausted",
+            "detail": "Full chain completed (spoc → manager → skip_level → voice) with no payment.",
+            "at_display": format_ist(case.closed_at) if case.closed_at else None,
+        }
+    pause_info = get_pause_info(case)
+    if pause_info is None:
+        return {"reason": None, "detail": None, "at_display": None}
+    return {
+        "reason": pause_info["reason"],
+        "detail": pause_info["detail"],
+        "at_display": format_ist(pause_info["at"]) if pause_info["at"] else None,
+    }
+
+
 @router.get("/cases", response_class=HTMLResponse)
-def cases_page(request: Request, session: Session = Depends(get_session)):
-    cases = session.query(Case).order_by(Case.created_at.desc()).all()
+def cases_page(request: Request, view: str = "all", session: Session = Depends(get_session)):
+    all_cases = session.query(Case).order_by(Case.created_at.desc()).all()
+    needs_review_count = sum(1 for c in all_cases if c.status in _NEEDS_REVIEW_STATUSES)
+
+    cases = [c for c in all_cases if c.status in _NEEDS_REVIEW_STATUSES] if view == "needs_review" else all_cases
+
     rows = []
     for c in cases:
         score = session.get(ReliabilityScore, c.customer_id)
+        info = _review_info(c)
         rows.append(
             {
                 "id": c.id,
@@ -230,13 +272,61 @@ def cases_page(request: Request, session: Session = Depends(get_session)):
                 "invoice_no": c.invoice.invoice_no,
                 "bucket": c.bucket,
                 "status": c.status,
+                "disputed": info["reason"] == "disputed",
+                "pause_reason": info["reason"],
+                "pause_detail": info["detail"],
+                "paused_at_display": info["at_display"],
                 "level": LEVEL_NAMES[c.level_index] if c.playbook_name else "-",
                 "outstanding": format_inr(c.invoice.outstanding),
                 "score": round(score.score, 0) if score else "-",
                 "band": score.band if score else "-",
             }
         )
-    return templates.TemplateResponse("cases.html", {"request": request, "cases": rows})
+    return templates.TemplateResponse(
+        "cases.html",
+        {"request": request, "cases": rows, "view": view, "needs_review_count": needs_review_count},
+    )
+
+
+@router.get("/api/cases/export.csv")
+def api_cases_export_csv(session: Session = Depends(get_session)):
+    """Raw, unformatted numbers (not ₹-strings) — this is for a spreadsheet
+    to sum/pivot, not for reading on screen; the portal already covers
+    that. utf-8-sig so Excel on Windows opens customer names with
+    non-ASCII characters correctly instead of mangling them."""
+    import csv
+    import io
+
+    cases = session.query(Case).order_by(Case.created_at.desc()).all()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Case ID", "Customer", "Invoice No", "Due Date", "Outstanding", "Bucket", "Status", "Disputed",
+        "Escalation Level", "Reliability Score", "Reliability Band", "Next Action (IST)", "Touch Count",
+    ])
+    for c in cases:
+        score = session.get(ReliabilityScore, c.customer_id)
+        writer.writerow([
+            c.id,
+            c.customer.name,
+            c.invoice.invoice_no,
+            format_date(c.invoice.due_date),
+            c.invoice.outstanding,
+            c.bucket,
+            c.status,
+            "yes" if is_disputed(c) else "no",
+            LEVEL_NAMES[c.level_index] if c.playbook_name else "-",
+            score.score if score else "",
+            score.band if score else "",
+            format_ist(c.next_action_at) if c.next_action_at else "",
+            c.touch_count,
+        ])
+
+    return Response(
+        content=buf.getvalue().encode("utf-8-sig"),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="cases_{dt.date.today().isoformat()}.csv"'},
+    )
 
 
 @router.get("/cases/{case_id}", response_class=HTMLResponse)
@@ -290,6 +380,58 @@ def api_case_set_level(case_id: int, payload: SetLevelRequest, session: Session 
     return {"level": payload.level}
 
 
+@router.post("/api/cases/{case_id}/reopen")
+def api_case_reopen(case_id: int, session: Session = Depends(get_session)):
+    case = _get_case_or_404(case_id, session)
+    if case.status not in ("paused", "exhausted"):
+        raise HTTPException(status_code=400, detail=f"case is {case.status} — nothing to reopen")
+    reopen_case(session, case)
+    return {"status": case.status}
+
+
+class LogPromiseRequest(BaseModel):
+    promised_date: str  # ISO YYYY-MM-DD, from a <input type="date">
+
+
+@router.post("/api/cases/{case_id}/promise")
+def api_case_log_promise(case_id: int, payload: LogPromiseRequest, session: Session = Depends(get_session)):
+    """Manual equivalent of the WhatsApp "Promise to pay for X by Y" —
+    for a promise a SPOC got over a phone call rather than through the bot.
+    Same validation as the WhatsApp path (see app/router/date_phrase.py):
+    no past dates, nothing implausibly far out."""
+    case = _get_case_or_404(case_id, session)
+    try:
+        promised_date = dt.date.fromisoformat(payload.promised_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid date — expected YYYY-MM-DD") from exc
+
+    today = dt.date.today()
+    if promised_date < today:
+        raise HTTPException(status_code=400, detail="promised date can't be in the past")
+    if (promised_date - today).days > 365:
+        raise HTTPException(status_code=400, detail="that's too far out — please pick a nearer date")
+
+    promise = record_promise(session, case.customer, promised_date, source="manual")
+    return {"status": promise.status, "promised_date": promise.promised_date.isoformat()}
+
+
+class LogDisputeRequest(BaseModel):
+    reason: str | None = None
+
+
+@router.post("/api/cases/{case_id}/dispute")
+def api_case_log_dispute(case_id: int, payload: LogDisputeRequest, session: Session = Depends(get_session)):
+    """Manual equivalent of the WhatsApp "Dispute for X: reason" — for
+    flagging a dispute raised over a phone call rather than through the
+    bot. Pauses every open case for this customer, same as the WhatsApp
+    and chatbot paths (app/cases/engine.py::flag_dispute)."""
+    case = _get_case_or_404(case_id, session)
+    if case.status != "open":
+        raise HTTPException(status_code=400, detail=f"case is {case.status}, not open — nothing to dispute")
+    cases = flag_dispute(session, case.customer, payload.reason)
+    return {"cases_paused": len(cases)}
+
+
 @router.post("/batch/run")
 def batch_run(session: Session = Depends(get_session)):
     return run_batch(session)
@@ -322,16 +464,62 @@ def settings_page(request: Request, session: Session = Depends(get_session)):
             "razorpay_configured": razorpay_client.is_configured(),
             "twilio_configured": twilio_client.is_configured(),
             "sendgrid_configured": bool(os.getenv("SENDGRID_API_KEY")),
+            "anthropic_configured": chatbot_agent.is_configured(),
             "test_email_override": os.getenv("TEST_EMAIL_OVERRIDE") or None,
             "payment_notify_whatsapp_to": os.getenv("PAYMENT_NOTIFY_WHATSAPP_TO") or None,
         },
     )
 
 
+class ChatRequest(BaseModel):
+    message: str
+
+
+# In-memory, single conversation — a demo/ops tool, not a multi-user
+# product surface, so this deliberately doesn't need a DB table. Resets on
+# server restart or an explicit "New conversation"; that's an acceptable
+# tradeoff for what this is.
+_CHAT_STATE: dict = {"messages": [], "pending_action": None, "display_log": []}
+
+
+@router.get("/chat", response_class=HTMLResponse)
+def chat_page(request: Request):
+    return templates.TemplateResponse(
+        "chat.html",
+        {
+            "request": request,
+            "anthropic_configured": chatbot_agent.is_configured(),
+            "display_log": _CHAT_STATE["display_log"],
+        },
+    )
+
+
+@router.post("/api/chat")
+def api_chat(payload: ChatRequest, session: Session = Depends(get_session)):
+    result = chatbot_agent.chat(session, _CHAT_STATE["messages"], _CHAT_STATE["pending_action"], payload.message)
+    _CHAT_STATE["messages"] = result.messages
+    _CHAT_STATE["pending_action"] = result.pending_action
+    _CHAT_STATE["display_log"].append({"role": "user", "text": payload.message})
+    _CHAT_STATE["display_log"].append({"role": "assistant", "text": result.reply})
+    return {"reply": result.reply, "pending_confirmation": result.pending_action is not None}
+
+
+@router.post("/api/chat/reset")
+def api_chat_reset():
+    _CHAT_STATE["messages"] = []
+    _CHAT_STATE["pending_action"] = None
+    _CHAT_STATE["display_log"] = []
+    return {"status": "reset"}
+
+
 @router.get("/report", response_class=HTMLResponse)
 def report_page(request: Request, session: Session = Depends(get_session)):
     report = build_report(session)
-    return templates.TemplateResponse("report.html", {"request": request, "report": report, "format_inr": format_inr})
+    forecast = build_cash_flow_forecast(session)
+    return templates.TemplateResponse(
+        "report.html",
+        {"request": request, "report": report, "forecast": forecast, "format_inr": format_inr},
+    )
 
 
 @router.get("/api/report")
@@ -353,32 +541,20 @@ def api_report(session: Session = Depends(get_session)):
     }
 
 
+@router.get("/api/report/cash-flow")
+def api_cash_flow_forecast(session: Session = Depends(get_session)):
+    forecast = build_cash_flow_forecast(session)
+    return {
+        "buckets": [
+            {"key": b.key, "label": b.label, "total_amount": b.total_amount, "count": b.count, "low_confidence_amount": b.low_confidence_amount}
+            for b in forecast.buckets
+        ],
+        "no_due_date_amount": forecast.no_due_date_amount,
+        "no_due_date_count": forecast.no_due_date_count,
+        "total_outstanding": forecast.total_outstanding,
+    }
+
+
 @router.get("/api/playbooks")
 def api_playbooks():
     return get_registry()
-
-
-class TestSendRequest(BaseModel):
-    to: str
-
-
-@router.get("/api/test/sample-message")
-def api_test_sample_message(channel: str = "voice"):
-    try:
-        return render_sample_message(channel)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/api/test/send")
-def api_test_send(payload: TestSendRequest, channel: str = "voice"):
-    """Fires a real send on the given channel with placeholder content —
-    decoupled from any case, purely to confirm a channel integration
-    actually works (and what it actually says) before relying on it."""
-    try:
-        sample = render_sample_message(channel)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    result = get_channel(channel).send(to=payload.to, cc=None, subject="Test message — AI Revenue Recovery", body=sample["body"])
-    return {"status": result.status, "detail": result.detail, "body": sample["body"]}

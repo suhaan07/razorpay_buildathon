@@ -1,6 +1,10 @@
+import datetime as dt
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.cases.engine import sync_cases
+from app.data.models import Case, PromiseToPay
 from app.db import get_session
 from app.main import app as fastapi_app
 
@@ -171,3 +175,173 @@ def test_customer_name_with_ampersand_does_not_break_the_xml_reply(client, make_
     import xml.etree.ElementTree as ET
 
     ET.fromstring(resp.text)  # raises if the reply isn't well-formed XML
+
+
+def test_promise_to_pay_happy_path(client, session, make_customer, make_invoice):
+    customer = make_customer(name="Promise WA Co")
+    make_invoice(customer=customer, invoice_no="PWA-1", outstanding=10_000.0)
+
+    body = _ask(client, "Promise to pay for Promise WA Co by tomorrow")
+    assert "Promise WA Co" in body
+    assert "check back" in body.lower()
+
+    promise = session.query(PromiseToPay).filter(PromiseToPay.customer_id == customer.id).one()
+    assert promise.status == "pending"
+    assert promise.source == "whatsapp"
+    assert promise.promised_date == dt.date.today() + dt.timedelta(days=1)
+
+
+def test_promise_to_pay_sets_last_whatsapp_query_from(client, session, make_customer, make_invoice):
+    customer = make_customer(name="Promise Query From Co")
+    make_invoice(customer=customer, invoice_no="PWA-2", outstanding=10_000.0)
+
+    resp = client.post("/whatsapp/webhook", data={"Body": "Promise to pay for Promise Query From Co by tomorrow", "From": "whatsapp:+919999900002"})
+    assert resp.status_code == 200
+
+    session.refresh(customer)
+    assert customer.last_whatsapp_query_from == "whatsapp:+919999900002"
+
+
+def test_promise_to_pay_missing_by_clause_gets_format_hint(client, make_customer, make_invoice):
+    make_customer(name="Acme Pvt Ltd")
+    body = _ask(client, "Promise to pay for Acme Pvt Ltd")
+    assert "use the format" in body.lower()
+
+
+def test_promise_to_pay_customer_name_containing_the_word_by_still_fails_gracefully(client, make_customer):
+    # known limitation: a customer name that itself contains " by " (rare —
+    # none of the real customer names in this app do) can confuse the
+    # for/by split when there's no real date clause at all. It must still
+    # degrade to a clear, actionable error, never a crash or silent 500.
+    make_customer(name="Missing By Co")
+    body = _ask(client, "Promise to pay for Missing By Co")
+    assert "<Response>" in body
+    assert "couldn't understand the date" in body
+
+
+def test_promise_to_pay_customer_not_found(client):
+    body = _ask(client, "Promise to pay for Nonexistent Corp by tomorrow")
+    assert "couldn't find" in body
+
+
+def test_promise_to_pay_ambiguous_customer(client, make_customer, make_invoice):
+    c1 = make_customer(name="Ambiguous Promise Mumbai")
+    c2 = make_customer(name="Ambiguous Promise Delhi")
+    make_invoice(customer=c1, invoice_no="AP-1")
+    make_invoice(customer=c2, invoice_no="AP-2")
+
+    body = _ask(client, "Promise to pay for Ambiguous Promise by tomorrow")
+    assert "more than one account" in body
+
+
+def test_promise_to_pay_unparseable_date(client, make_customer, make_invoice):
+    customer = make_customer(name="Bad Date Co")
+    make_invoice(customer=customer, invoice_no="BD-1", outstanding=10_000.0)
+
+    body = _ask(client, "Promise to pay for Bad Date Co by whenever")
+    assert "couldn't understand the date" in body
+
+
+def test_promise_to_pay_nothing_outstanding(client, make_customer, make_invoice):
+    customer = make_customer(name="All Clear Promise Co")
+    make_invoice(customer=customer, invoice_no="AC-1", outstanding=0.0)
+
+    body = _ask(client, "Promise to pay for All Clear Promise Co by tomorrow")
+    assert "nothing outstanding" in body.lower()
+
+
+def test_promise_to_pay_customer_name_with_ampersand_stays_valid_xml(client, make_customer, make_invoice):
+    customer = make_customer(name="Smith & Sons Pvt Ltd")
+    make_invoice(customer=customer, invoice_no="SS-2", outstanding=5_000.0)
+
+    resp = client.post("/whatsapp/webhook", data={"Body": "Promise to pay for Smith & Sons by tomorrow", "From": "whatsapp:+919876500001"})
+    assert resp.status_code == 200
+
+    import xml.etree.ElementTree as ET
+    ET.fromstring(resp.text)
+
+
+def test_usage_hint_mentions_promise_command(client):
+    body = _ask(client, "hello there")
+    assert "promise to pay" in body.lower()
+
+
+def test_usage_hint_mentions_dispute_command(client):
+    body = _ask(client, "hello there")
+    assert "dispute" in body.lower()
+
+
+def test_dispute_happy_path_pauses_the_case(client, session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute WA Co")
+    invoice = make_invoice(customer=customer, invoice_no="DWA-1", outstanding=10_000.0)
+    sync_cases(session)
+    case = session.query(Case).filter(Case.invoice_id == invoice.id).one()
+
+    body = _ask(client, "Dispute for Dispute WA Co: already paid via bank transfer")
+    assert "Dispute WA Co" in body
+    assert "paused" in body.lower()
+    assert "already paid via bank transfer" in body
+
+    session.refresh(case)
+    assert case.status == "paused"
+
+
+def test_dispute_without_reason(client, session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute No Reason Co")
+    make_invoice(customer=customer, invoice_no="DNR-1", outstanding=10_000.0)
+    sync_cases(session)
+
+    body = _ask(client, "Dispute for Dispute No Reason Co")
+    assert "paused" in body.lower()
+    assert "Reason noted" not in body
+
+
+def test_dispute_sets_last_whatsapp_query_from(client, session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute Query From Co")
+    make_invoice(customer=customer, invoice_no="DQF-1", outstanding=10_000.0)
+    sync_cases(session)
+
+    resp = client.post("/whatsapp/webhook", data={"Body": "Dispute for Dispute Query From Co: wrong amount", "From": "whatsapp:+919999900003"})
+    assert resp.status_code == 200
+    session.refresh(customer)
+    assert customer.last_whatsapp_query_from == "whatsapp:+919999900003"
+
+
+def test_dispute_missing_customer_gets_format_hint(client):
+    body = _ask(client, "Dispute please help")
+    assert "use the format" in body.lower()
+
+
+def test_dispute_customer_not_found(client):
+    body = _ask(client, "Dispute for Nonexistent Corp: wrong")
+    assert "couldn't find" in body
+
+
+def test_dispute_ambiguous_customer(client, make_customer, make_invoice):
+    c1 = make_customer(name="Ambiguous Dispute Mumbai")
+    c2 = make_customer(name="Ambiguous Dispute Delhi")
+    make_invoice(customer=c1, invoice_no="ADI-1")
+    make_invoice(customer=c2, invoice_no="ADI-2")
+
+    body = _ask(client, "Dispute for Ambiguous Dispute: wrong")
+    assert "more than one account" in body
+
+
+def test_dispute_no_open_cases(client, make_customer, make_invoice):
+    customer = make_customer(name="Dispute Nothing Owed Co")
+    make_invoice(customer=customer, invoice_no="DNO-1", outstanding=0.0)
+
+    body = _ask(client, "Dispute for Dispute Nothing Owed Co: wrong")
+    assert "no active case" in body.lower()
+
+
+def test_dispute_customer_name_with_ampersand_stays_valid_xml(client, session, make_customer, make_invoice):
+    customer = make_customer(name="Bright & Sons Pvt Ltd")
+    make_invoice(customer=customer, invoice_no="BS-1", outstanding=5_000.0)
+    sync_cases(session)
+
+    resp = client.post("/whatsapp/webhook", data={"Body": "Dispute for Bright & Sons: wrong", "From": "whatsapp:+919876500001"})
+    assert resp.status_code == 200
+
+    import xml.etree.ElementTree as ET
+    ET.fromstring(resp.text)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import app.notifications as notifications_module
-from app.notifications import notify_payment_received
+from app.notifications import notify_payment_received, send_ops_digest
 
 
 def test_noop_when_recipient_not_configured(monkeypatch):
@@ -144,3 +144,120 @@ def test_send_failure_is_swallowed_not_raised(monkeypatch):
 
     # must not raise — a notification outage can never take down payment processing
     notify_payment_received(customer_name="Acme", total_amount=1000.0, invoice_numbers=["INV-1"])
+
+
+def test_digest_noop_when_nothing_to_report(monkeypatch):
+    monkeypatch.setenv("PAYMENT_NOTIFY_WHATSAPP_TO", "+919876500001")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_fake")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fake_token")
+
+    class ExplodingClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise AssertionError("should never be called when there's nothing new to report")
+
+    monkeypatch.setattr(notifications_module.twilio_client, "get_client", lambda: ExplodingClient())
+    send_ops_digest(broken_promise_customer_names=[], exhausted_case_summaries=[])
+
+
+def test_digest_noop_when_recipient_not_configured(monkeypatch):
+    monkeypatch.delenv("PAYMENT_NOTIFY_WHATSAPP_TO", raising=False)
+    send_ops_digest(broken_promise_customer_names=["Acme"], exhausted_case_summaries=[])
+
+
+def test_digest_includes_broken_promises_only(monkeypatch):
+    monkeypatch.setenv("PAYMENT_NOTIFY_WHATSAPP_TO", "+919876500001")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_fake")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fake_token")
+
+    sent = {}
+
+    class FakeClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                sent.update(kwargs)
+
+    monkeypatch.setattr(notifications_module.twilio_client, "get_client", lambda: FakeClient())
+
+    send_ops_digest(broken_promise_customer_names=["Acme Pvt Ltd", "Beta Co"], exhausted_case_summaries=[])
+    assert "Broken promises (2)" in sent["body"]
+    assert "Acme Pvt Ltd" in sent["body"] and "Beta Co" in sent["body"]
+    assert "Exhausted" not in sent["body"]
+
+
+def test_digest_singular_wording_for_one_broken_promise(monkeypatch):
+    monkeypatch.setenv("PAYMENT_NOTIFY_WHATSAPP_TO", "+919876500001")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_fake")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fake_token")
+
+    sent = {}
+
+    class FakeClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                sent.update(kwargs)
+
+    monkeypatch.setattr(notifications_module.twilio_client, "get_client", lambda: FakeClient())
+
+    send_ops_digest(broken_promise_customer_names=["Acme"], exhausted_case_summaries=[])
+    assert "Broken promise (1)" in sent["body"]
+    assert "promises" not in sent["body"]
+
+
+def test_digest_includes_exhausted_cases_only(monkeypatch):
+    monkeypatch.setenv("PAYMENT_NOTIFY_WHATSAPP_TO", "+919876500001")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_fake")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fake_token")
+
+    sent = {}
+
+    class FakeClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                sent.update(kwargs)
+
+    monkeypatch.setattr(notifications_module.twilio_client, "get_client", lambda: FakeClient())
+
+    send_ops_digest(broken_promise_customer_names=[], exhausted_case_summaries=["Gamma Co (INV-99)"])
+    assert "Exhausted, unpaid despite full chain (1 case)" in sent["body"]
+    assert "Gamma Co (INV-99)" in sent["body"]
+    assert "Broken" not in sent["body"]
+
+
+def test_digest_includes_both_sections_when_both_present(monkeypatch):
+    monkeypatch.setenv("PAYMENT_NOTIFY_WHATSAPP_TO", "+919876500001")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_fake")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fake_token")
+
+    sent = {}
+
+    class FakeClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                sent.update(kwargs)
+
+    monkeypatch.setattr(notifications_module.twilio_client, "get_client", lambda: FakeClient())
+
+    send_ops_digest(broken_promise_customer_names=["Acme"], exhausted_case_summaries=["Gamma Co (INV-99)", "Delta Co (INV-100)"])
+    assert "Broken promise (1)" in sent["body"]
+    assert "Exhausted, unpaid despite full chain (2 cases)" in sent["body"]
+
+
+def test_digest_send_failure_is_swallowed(monkeypatch):
+    monkeypatch.setenv("PAYMENT_NOTIFY_WHATSAPP_TO", "+919876500001")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_fake")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "fake_token")
+
+    class FailingClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise RuntimeError("simulated outage")
+
+    monkeypatch.setattr(notifications_module.twilio_client, "get_client", lambda: FailingClient())
+    send_ops_digest(broken_promise_customer_names=["Acme"], exhausted_case_summaries=[])  # must not raise

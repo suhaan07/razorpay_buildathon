@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.cases.engine import TERMINAL_STATUSES, close_case, record_event
+from app.cases.engine import TERMINAL_STATUSES, close_case, record_event, resolve_promises_for_customer
 from app.data.models import Case
 from app.db import get_session
 from app.integrations.razorpay_client import verify_webhook_signature
@@ -55,6 +55,7 @@ def _handle_consolidated_payment(session: Session, notes: dict, event_type: str,
 
     if open_cases:
         recompute_for_customer_id(session, int(customer_id))
+        resolve_promises_for_customer(session, int(customer_id))
         notify_payment_received(
             customer_name=open_cases[0].customer.name,
             total_amount=sum(c.invoice.inv_amount for c in open_cases),
@@ -100,6 +101,7 @@ async def razorpay_webhook(
         _close_one(session, case, event_type, payment_id, consolidated=False)
         session.commit()
         recompute_for_customer_id(session, case.customer_id)
+        resolve_promises_for_customer(session, case.customer_id)
         notify_payment_received(
             customer_name=case.customer.name,
             total_amount=case.invoice.inv_amount,

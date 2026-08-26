@@ -4,6 +4,25 @@
 <div class="flex flex-col gap-5">
   <h1 class="text-2xl font-display font-extrabold">Invoices</h1>
 
+  <div class="grid sm:grid-cols-2 gap-4">
+    <div class="card p-4">
+      <h2 class="text-sm font-semibold mb-2">Ingest a sheet</h2>
+      <form id="upload-form" class="flex flex-wrap items-center gap-2.5">
+        <input type="file" id="file-input" accept=".xlsx" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)] file:mr-3 file:border-0 file:bg-[var(--accent-soft)] file:text-[var(--accent)] file:font-semibold file:rounded-md file:px-3 file:py-1.5">
+        <button type="submit" class="btn btn-primary">Upload</button>
+      </form>
+      <div id="upload-result" class="text-xs mt-2"></div>
+    </div>
+    <div class="card p-4">
+      <h2 class="text-sm font-semibold mb-2">Run the escalation engine</h2>
+      <div class="flex flex-wrap items-center gap-2.5">
+        <button id="run-batch" class="btn btn-primary" style="background:var(--success)">Run batch (decide + dispatch)</button>
+        <span id="auto-dispatch-status" class="text-xs"></span>
+      </div>
+      <div id="batch-result" class="text-xs mt-2"></div>
+    </div>
+  </div>
+
   <div id="unclassified-banner" class="hidden rounded-lg bg-[var(--warning-soft)] border border-[var(--warning-border)] text-[var(--warning)] text-sm px-4 py-2.5"></div>
 
   <div id="tabs" class="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1"></div>
@@ -102,6 +121,57 @@ document.getElementById('search').addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(load, 250);
 });
+
+document.getElementById('upload-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const file = document.getElementById('file-input').files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  const el = document.getElementById('upload-result');
+  el.textContent = 'Uploading…';
+  const resp = await fetch('/upload', { method: 'POST', body: formData });
+  const data = await resp.json();
+  if (resp.ok) {
+    el.innerHTML = `<span class="text-[var(--success)]">Ingested ${data.row_count} rows across ${data.customer_count} customers.</span> ` +
+      (data.missing_due_date_count ? `<span class="text-[var(--warning)]">${data.missing_due_date_count} rows missing a due date.</span>` : '');
+    load();
+  } else {
+    el.innerHTML = `<span class="text-[var(--danger)]">${data.detail}</span>`;
+  }
+});
+
+document.getElementById('run-batch').addEventListener('click', async () => {
+  const el = document.getElementById('batch-result');
+  el.textContent = 'Running…';
+  try {
+    const resp = await fetch('/batch/run', { method: 'POST' });
+    const text = await resp.text();
+    if (!resp.ok) {
+      el.innerHTML = `<span class="text-[var(--danger)]">Batch run failed (HTTP ${resp.status}): ${text.slice(0, 500)}</span>`;
+      return;
+    }
+    const data = JSON.parse(text);
+    if (data.auto_dispatch_paused) {
+      el.innerHTML = `<span class="text-[var(--warning)]">Auto-dispatch is paused — nothing was sent, no links were created. Toggle it on in <a href="/settings" class="underline">Settings</a> if you meant to dispatch for real.</span>`;
+      return;
+    }
+    const failedNote = data.failed ? ` <span class="text-[var(--danger)]">failed=${data.failed} (see a case's timeline for the error)</span>` : '';
+    el.innerHTML = `<span class="num">processed=${data.processed} dispatched=${data.dispatched} paused=${data.paused} exhausted=${data.exhausted}</span>${failedNote}`;
+    load();
+  } catch (err) {
+    el.innerHTML = `<span class="text-[var(--danger)]">Request failed: ${err}</span>`;
+  }
+});
+
+(async () => {
+  const resp = await fetch('/api/settings');
+  const data = await resp.json();
+  const el = document.getElementById('auto-dispatch-status');
+  el.innerHTML = data.auto_dispatch_paused
+    ? '<span class="text-[var(--warning)]">Auto-dispatch is OFF — Run batch will do nothing until you turn it on in <a href="/settings" class="underline">Settings</a>.</span>'
+    : '<span class="text-[var(--danger)]">Auto-dispatch is ON — Run batch will actually send.</span>';
+})();
 
 load();
 </script>

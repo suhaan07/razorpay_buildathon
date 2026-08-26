@@ -1,9 +1,11 @@
+import datetime as dt
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.webhooks.razorpay_webhook as webhook_module
+from app.cases.engine import record_promise
 from app.data.models import Case
 from app.db import get_session
 from app.main import app as fastapi_app
@@ -164,6 +166,21 @@ def test_redelivered_consolidated_payment_is_idempotent(client, session, make_cu
     assert resp.status_code == 200
     assert resp.json()["case_ids"] == []  # nothing left open — naturally idempotent
     assert notify_calls == []
+
+
+def test_payment_immediately_resolves_a_pending_promise_as_kept(client, session, make_customer, make_invoice, notify_calls):
+    customer = make_customer(name="Kept On Payment Co")
+    invoice = make_invoice(customer=customer, outstanding=5_000.0, inv_amount=5_000.0, invoice_no="WH-PTP-1")
+    case = Case(invoice_id=invoice.id, customer_id=customer.id, bucket="0-15", pay_link_id="plink_ptp")
+    session.add(case)
+    session.commit()
+    promise = record_promise(session, customer, dt.date.today() + dt.timedelta(days=10), source="whatsapp")
+
+    resp = client.post("/webhooks/razorpay", content=json.dumps(_webhook_body("payment_link.paid", "plink_ptp")))
+    assert resp.status_code == 200
+
+    session.refresh(promise)
+    assert promise.status == "kept"  # resolved right away, not on the next batch run
 
 
 def test_payment_failed_does_not_notify(client, session, make_invoice, notify_calls):

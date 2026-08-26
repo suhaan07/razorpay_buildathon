@@ -44,6 +44,7 @@ class Customer(Base):
     reliability: Mapped["ReliabilityScore | None"] = relationship(
         back_populates="customer", uselist=False, cascade="all, delete-orphan"
     )
+    promises: Mapped[list["PromiseToPay"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
 
 
 class Invoice(Base):
@@ -140,3 +141,27 @@ class Settings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     auto_dispatch_paused: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class PromiseToPay(Base):
+    """A customer's stated commitment to clear their account by a given
+    date — scoped to the whole customer, not one invoice, since both the
+    WhatsApp bot and a SPOC logging a phone call naturally think in terms
+    of "when will THIS CUSTOMER pay", not one line item. Only ever one
+    "pending" promise per customer at a time — a newer one supersedes the
+    older (see app/cases/engine.py::record_promise); "kept"/"broken" are
+    resolved by whether the customer's total outstanding hit zero by the
+    promised date (see resolve_promises)."""
+
+    __tablename__ = "promises_to_pay"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    promised_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(16))  # "whatsapp" | "manual"
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | kept | broken | superseded
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    customer: Mapped["Customer"] = relationship(back_populates="promises")

@@ -1,17 +1,26 @@
 import datetime as dt
 
 from app.cases.engine import (
+    close_case,
     due_cases,
+    flag_dispute,
     force_dispatch_case,
+    get_pause_info,
     get_settings,
+    is_disputed,
+    pause_case,
     preview_next_message,
     preview_voice_call,
+    record_promise,
+    reopen_case,
+    resolve_promises,
+    resolve_promises_for_customer,
     run_batch,
     send_voice_call_test,
     set_case_level,
     sync_cases,
 )
-from app.data.models import Case, Settings
+from app.data.models import Case, PromiseToPay, Settings
 
 # 10:00 UTC = 15:30 IST — comfortably outside the default 21:00-09:00 IST
 # quiet-hours window, so these tests don't flake depending on what time of
@@ -323,6 +332,141 @@ def test_set_case_level_rejects_unknown_level(session, make_invoice):
         pass
 
 
+def test_record_promise_pulls_next_action_at_on_open_cases(session, make_customer, make_invoice):
+    customer = make_customer(name="Promise Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PTP-1")
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    promised_date = dt.date.today() + dt.timedelta(days=5)
+    promise = record_promise(session, customer, promised_date, source="whatsapp", raw_text="I'll pay by Friday")
+
+    assert promise.status == "pending"
+    session.refresh(case)
+    expected_check_at = dt.datetime.combine(promised_date + dt.timedelta(days=1), dt.time.min)
+    assert case.next_action_at == expected_check_at
+    assert any((e.payload or {}).get("reason") == "promise_recorded" for e in case.events)
+
+
+def test_record_promise_applies_to_every_open_case_for_that_customer(session, make_customer, make_invoice):
+    customer = make_customer(name="Multi Case Promise Co")
+    make_invoice(customer=customer, invoice_no="PTP-M1", outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5))
+    make_invoice(customer=customer, invoice_no="PTP-M2", outstanding=20_000.0, due_date=dt.date.today() - dt.timedelta(days=5))
+    sync_cases(session)
+    cases = session.query(Case).filter(Case.customer_id == customer.id).all()
+    assert len(cases) == 2
+
+    promised_date = dt.date.today() + dt.timedelta(days=3)
+    record_promise(session, customer, promised_date, source="manual")
+
+    for case in cases:
+        session.refresh(case)
+        assert case.next_action_at == dt.datetime.combine(promised_date + dt.timedelta(days=1), dt.time.min)
+
+
+def test_record_promise_does_not_touch_closed_cases(session, make_customer, make_invoice):
+    customer = make_customer(name="Closed Case Promise Co")
+    make_invoice(customer=customer, invoice_no="PTP-C1", outstanding=0.0, due_date=dt.date.today() - dt.timedelta(days=5))
+    make_invoice(customer=customer, invoice_no="PTP-C2", outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5))
+    sync_cases(session)  # the fully-paid invoice never gets an open case at all
+
+    open_case = session.query(Case).filter(Case.customer_id == customer.id).one()
+    original_next_action_at = open_case.next_action_at
+
+    record_promise(session, customer, dt.date.today() + dt.timedelta(days=2), source="manual")
+    session.refresh(open_case)
+    assert open_case.next_action_at != original_next_action_at  # only the real open case exists to update
+
+
+def test_record_promise_supersedes_prior_pending_promise(session, make_customer, make_invoice):
+    customer = make_customer(name="Renegotiate Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PTP-2")
+    sync_cases(session)
+
+    first = record_promise(session, customer, dt.date.today() + dt.timedelta(days=5), source="whatsapp")
+    second = record_promise(session, customer, dt.date.today() + dt.timedelta(days=10), source="whatsapp")
+
+    session.refresh(first)
+    assert first.status == "superseded"
+    assert first.resolved_at is not None
+    assert second.status == "pending"
+
+    pending = session.query(PromiseToPay).filter(PromiseToPay.status == "pending").all()
+    assert len(pending) == 1
+    assert pending[0].id == second.id
+
+
+def test_resolve_promises_marks_broken_when_date_passed_and_still_owing(session, make_customer, make_invoice):
+    customer = make_customer(name="Broken Promise Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=20), invoice_no="PTP-3")
+    sync_cases(session)
+    promise = record_promise(session, customer, dt.date.today() - dt.timedelta(days=1), source="manual")
+
+    resolve_promises(session, today=dt.date.today())
+
+    session.refresh(promise)
+    assert promise.status == "broken"
+    assert promise.resolved_at is not None
+
+
+def test_resolve_promises_marks_kept_when_fully_paid_even_before_the_date(session, make_customer, make_invoice):
+    customer = make_customer(name="Kept Early Co")
+    invoice = make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PTP-4")
+    sync_cases(session)
+    promise = record_promise(session, customer, dt.date.today() + dt.timedelta(days=10), source="whatsapp")
+
+    invoice.outstanding = 0.0  # paid early, well before the promised date
+    session.commit()
+    resolve_promises(session, today=dt.date.today())
+
+    session.refresh(promise)
+    assert promise.status == "kept"
+
+
+def test_resolve_promises_leaves_pending_when_still_owing_and_not_yet_due(session, make_customer, make_invoice):
+    customer = make_customer(name="Still Pending Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PTP-5")
+    sync_cases(session)
+    promise = record_promise(session, customer, dt.date.today() + dt.timedelta(days=5), source="manual")
+
+    resolve_promises(session, today=dt.date.today())
+
+    session.refresh(promise)
+    assert promise.status == "pending"
+
+
+def test_resolve_promises_for_customer_is_scoped(session, make_customer, make_invoice):
+    a = make_customer(name="Scope A Co")
+    b = make_customer(name="Scope B Co")
+    make_invoice(customer=a, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=20), invoice_no="PTP-6A")
+    make_invoice(customer=b, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=20), invoice_no="PTP-6B")
+    sync_cases(session)
+    promise_a = record_promise(session, a, dt.date.today() - dt.timedelta(days=1), source="manual")
+    promise_b = record_promise(session, b, dt.date.today() - dt.timedelta(days=1), source="manual")
+
+    resolve_promises_for_customer(session, a.id, today=dt.date.today())
+
+    session.refresh(promise_a)
+    session.refresh(promise_b)
+    assert promise_a.status == "broken"
+    assert promise_b.status == "pending"  # untouched — different customer
+
+
+def test_broken_promise_raises_urgency_on_next_dispatch(session, make_customer, make_invoice):
+    # end-to-end: a broken promise actually changes what the AI decides,
+    # not just what's stored on the PromiseToPay row.
+    customer = make_customer(name="Escalate After Broken Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=20), invoice_no="PTP-7")
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    record_promise(session, customer, dt.date.today() - dt.timedelta(days=1), source="manual")
+    resolve_promises(session, today=dt.date.today())
+
+    preview = preview_next_message(session, case, now=FIXED_NOW)
+    assert "broken_promise_bonus" in preview["rationale"]
+
+
 def test_preview_reflects_test_email_override(session, make_invoice, monkeypatch):
     monkeypatch.setenv("TEST_EMAIL_OVERRIDE", "tester@example.com")
     make_invoice(outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="OVERRIDE-1")
@@ -414,34 +558,6 @@ def test_preview_shows_invoice_table_and_pay_all_flag(session, make_customer, ma
     assert not any((e.payload or {}).get("consolidated_pay_link_id") for e in case.events)
 
 
-def test_render_sample_message_for_voice():
-    from app.cases.engine import render_sample_message
-
-    sample = render_sample_message("voice")
-    assert sample["channel"] == "voice"
-    assert sample["recipients_role"] == "customer"
-    assert "Sample Customer Pvt Ltd" in sample["body"]
-    assert "45" in sample["body"]
-
-
-def test_render_sample_message_for_email():
-    from app.cases.engine import render_sample_message
-
-    sample = render_sample_message("email")
-    assert sample["channel"] == "email"
-    assert sample["recipients_role"] == "spoc"
-
-
-def test_render_sample_message_unknown_channel_raises():
-    from app.cases.engine import render_sample_message
-
-    try:
-        render_sample_message("carrier_pigeon")
-        assert False, "expected KeyError"
-    except KeyError:
-        pass
-
-
 def test_oversized_primary_link_not_shown_as_dead_button_in_email(session, make_customer, make_invoice, monkeypatch):
     # regression test: same issue as the WhatsApp bot — an oversized-stub
     # payment link must not be rendered as a clickable button in the
@@ -475,3 +591,283 @@ def test_oversized_primary_link_not_shown_as_dead_button_in_email(session, make_
     assert "stub_oversized" not in captured["body"]
     assert captured["html"] is not None
     assert "href=" not in captured["html"]  # no dead button rendered
+
+
+def test_flag_dispute_pauses_every_open_case_for_the_customer(session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute Engine Co")
+    make_invoice(customer=customer, invoice_no="DE-1", outstanding=10_000.0)
+    make_invoice(customer=customer, invoice_no="DE-2", outstanding=20_000.0)
+    sync_cases(session)
+    cases = session.query(Case).filter(Case.customer_id == customer.id).all()
+    assert len(cases) == 2
+
+    flagged = flag_dispute(session, customer, "already paid via bank transfer")
+    assert len(flagged) == 2
+
+    for case in cases:
+        session.refresh(case)
+        assert case.status == "paused"
+        assert case.next_action_at is None
+        assert is_disputed(case) is True
+
+
+def test_flag_dispute_does_not_touch_closed_or_already_paused_cases(session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute Skip Co")
+    open_inv = make_invoice(customer=customer, invoice_no="DS-1", outstanding=10_000.0)
+    paid_inv = make_invoice(customer=customer, invoice_no="DS-2", outstanding=0.0, inv_amount=5_000.0)
+    sync_cases(session)
+
+    open_case = session.query(Case).filter(Case.invoice_id == open_inv.id).one()
+    closed_case = paid_inv.case  # sync_cases closes an already-fully-paid invoice's case automatically... actually no case created if never open
+    assert closed_case is None  # confirms: a fully-paid invoice never got an open case in the first place
+
+    flagged = flag_dispute(session, customer, "reason")
+    assert [c.id for c in flagged] == [open_case.id]
+
+
+def test_dispute_reason_stored_on_the_case_event(session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute Reason Co")
+    make_invoice(customer=customer, invoice_no="DR-1", outstanding=10_000.0)
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    flag_dispute(session, customer, "invoice amount looks wrong")
+    session.refresh(case)
+    dispute_events = [e for e in case.events if (e.payload or {}).get("reason") == "disputed"]
+    assert len(dispute_events) == 1
+    assert dispute_events[0].payload["detail"] == "invoice amount looks wrong"
+
+
+def test_is_disputed_false_for_ordinary_pause(session, make_invoice):
+    invoice = make_invoice(outstanding=10_000.0, invoice_no="ORD-PAUSE-1")
+    case = Case(invoice_id=invoice.id, customer_id=invoice.customer_id, bucket="0-15")
+    session.add(case)
+    session.commit()
+
+    pause_case(session, case, reason="max_touch_cap_reached")
+    session.commit()
+    assert is_disputed(case) is False
+
+
+def test_is_disputed_false_for_open_case(session, make_invoice):
+    invoice = make_invoice(outstanding=10_000.0, invoice_no="OPEN-1")
+    case = Case(invoice_id=invoice.id, customer_id=invoice.customer_id, bucket="0-15")
+    session.add(case)
+    session.commit()
+    assert is_disputed(case) is False
+
+
+def test_reopen_case_resumes_escalation(session, make_customer, make_invoice):
+    customer = make_customer(name="Reopen Co")
+    make_invoice(customer=customer, invoice_no="RO-1", outstanding=10_000.0)
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    flag_dispute(session, customer, "turned out to be invalid")
+    session.refresh(case)
+    assert case.status == "paused"
+
+    reopen_case(session, case)
+    session.refresh(case)
+    assert case.status == "open"
+    assert is_disputed(case) is False  # reopened event is now the most recent system event
+    assert any((e.payload or {}).get("reason") == "reopened" for e in case.events)
+
+
+def test_reopen_preserves_escalation_progress_for_a_paused_case(session, make_customer, make_invoice):
+    # a dispute-paused case wasn't at the terminal voice level — being
+    # paused shouldn't throw away the level it had already reached
+    customer = make_customer(name="Reopen Progress Co")
+    make_invoice(customer=customer, outstanding=900_000.0, due_date=dt.date.today() - dt.timedelta(days=95), invoice_no="RO-2")
+    run_batch(session, now=FIXED_NOW)  # jumps straight to skip_level given how overdue/large this is
+    case = session.query(Case).one()
+    assert case.level_index == 2
+
+    flag_dispute(session, customer, "reason")
+    session.refresh(case)
+
+    reopen_case(session, case)
+    session.refresh(case)
+    assert case.status == "open"
+    assert case.level_index == 2  # unchanged — resumes where it was, not restarted
+
+
+def test_reopen_resets_touch_count_so_max_touch_pause_does_not_instantly_repause(session, make_invoice):
+    invoice = make_invoice(outstanding=10_000.0, invoice_no="RO-3")
+    case = Case(invoice_id=invoice.id, customer_id=invoice.customer_id, bucket="0-15", touch_count=6)
+    session.add(case)
+    session.commit()
+    pause_case(session, case, reason="max_touch_cap_reached")
+    session.commit()
+
+    reopen_case(session, case)
+    session.refresh(case)
+    assert case.status == "open"
+    assert case.touch_count == 0
+
+    # and it genuinely survives the next batch run instead of re-pausing immediately
+    result = run_batch(session, now=FIXED_NOW)
+    session.refresh(case)
+    assert case.status != "paused"
+
+
+def test_reopen_exhausted_case_gets_a_fresh_start_not_instant_re_exhaustion(session, make_invoice):
+    make_invoice(outstanding=900_000.0, due_date=dt.date.today() - dt.timedelta(days=95), invoice_no="RO-4")
+    now = FIXED_NOW
+    run_batch(session, now=now)
+    now += dt.timedelta(days=6)
+    run_batch(session, now=now)
+    now += dt.timedelta(days=6)
+    run_batch(session, now=now)
+    case = session.query(Case).one()
+    assert case.status == "exhausted"
+    assert case.close_reason == "exhausted"
+
+    reopen_case(session, case)
+    session.refresh(case)
+    assert case.status == "open"
+    assert case.level_index == 0
+    assert case.playbook_name is None
+    assert case.close_reason is None
+    assert case.closed_at is None
+    assert case.touch_count == 0
+
+    # and it does NOT instantly re-exhaust on the very next batch run
+    now += dt.timedelta(days=1)
+    run_batch(session, now=now)
+    session.refresh(case)
+    assert case.status != "exhausted"
+
+
+def test_reopen_event_records_which_status_it_came_from(session, make_invoice):
+    invoice = make_invoice(outstanding=10_000.0, invoice_no="RO-5")
+    case = Case(invoice_id=invoice.id, customer_id=invoice.customer_id, bucket="0-15")
+    session.add(case)
+    session.commit()
+    pause_case(session, case, reason="max_touch_cap_reached")
+    session.commit()
+
+    reopen_case(session, case)
+    session.refresh(case)
+    reopened_events = [e for e in case.events if (e.payload or {}).get("reason") == "reopened"]
+    assert reopened_events[-1].payload["from_status"] == "paused"
+
+
+def test_disputed_case_excluded_from_due_cases(session, make_customer, make_invoice):
+    customer = make_customer(name="Dispute Due Co")
+    make_invoice(customer=customer, invoice_no="DD-1", outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5))
+    sync_cases(session)
+    case = session.query(Case).one()
+    assert case in due_cases(session, now=FIXED_NOW)
+
+    flag_dispute(session, customer, "reason")
+    assert case not in due_cases(session, now=FIXED_NOW)
+
+
+def test_run_batch_sends_digest_for_newly_broken_promise(session, monkeypatch, make_customer, make_invoice):
+    import app.notifications as notifications_module
+
+    customer = make_customer(name="Digest Broken Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=20), invoice_no="DIG-1")
+    sync_cases(session)
+    record_promise(session, customer, dt.date.today() - dt.timedelta(days=1), source="manual")
+
+    calls = []
+    monkeypatch.setattr(notifications_module, "send_ops_digest", lambda **kwargs: calls.append(kwargs))
+
+    run_batch(session, now=FIXED_NOW)
+
+    assert len(calls) == 1
+    assert calls[0]["broken_promise_customer_names"] == ["Digest Broken Co"]
+    assert calls[0]["exhausted_case_summaries"] == []
+
+
+def test_run_batch_sends_digest_for_newly_exhausted_case(session, monkeypatch, make_invoice):
+    import app.notifications as notifications_module
+
+    make_invoice(outstanding=900_000.0, due_date=dt.date.today() - dt.timedelta(days=95), invoice_no="DIG-EXH-1")
+    now = FIXED_NOW
+    run_batch(session, now=now)  # reaches skip_level
+    now += dt.timedelta(days=6)
+    run_batch(session, now=now)  # advances to voice
+
+    calls = []
+    monkeypatch.setattr(notifications_module, "send_ops_digest", lambda **kwargs: calls.append(kwargs))
+
+    now += dt.timedelta(days=6)
+    run_batch(session, now=now)  # this run exhausts it
+
+    assert len(calls) == 1
+    assert calls[0]["exhausted_case_summaries"] == ["Customer for DIG-EXH-1 (DIG-EXH-1)"]
+    assert calls[0]["broken_promise_customer_names"] == []
+
+
+def test_run_batch_does_not_send_digest_when_nothing_new(session, monkeypatch, make_invoice):
+    import app.notifications as notifications_module
+
+    make_invoice(outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="DIG-QUIET-1")
+
+    calls = []
+    monkeypatch.setattr(notifications_module, "send_ops_digest", lambda **kwargs: calls.append(kwargs))
+
+    run_batch(session, now=FIXED_NOW)
+
+    assert calls == []
+
+
+def test_run_batch_still_sends_broken_promise_digest_while_auto_dispatch_paused(session, monkeypatch, make_customer, make_invoice):
+    import app.notifications as notifications_module
+
+    session.merge(Settings(id=1, auto_dispatch_paused=True))
+    session.commit()
+
+    customer = make_customer(name="Digest Paused Co")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=20), invoice_no="DIG-PAUSE-1")
+    sync_cases(session)
+    record_promise(session, customer, dt.date.today() - dt.timedelta(days=1), source="manual")
+
+    calls = []
+    monkeypatch.setattr(notifications_module, "send_ops_digest", lambda **kwargs: calls.append(kwargs))
+
+    result = run_batch(session, now=FIXED_NOW)
+
+    assert result["auto_dispatch_paused"] is True
+    assert len(calls) == 1
+    assert calls[0]["broken_promise_customer_names"] == ["Digest Paused Co"]
+
+
+def test_get_pause_info_none_for_open_case(session, make_invoice):
+    invoice = make_invoice(outstanding=10_000.0, invoice_no="PI-1")
+    case = Case(invoice_id=invoice.id, customer_id=invoice.customer_id, bucket="0-15")
+    session.add(case)
+    session.commit()
+    assert get_pause_info(case) is None
+
+
+def test_get_pause_info_for_dispute(session, make_customer, make_invoice):
+    customer = make_customer(name="Pause Info Dispute Co")
+    make_invoice(customer=customer, invoice_no="PI-2", outstanding=10_000.0)
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    flag_dispute(session, customer, "wrong amount")
+    session.refresh(case)
+
+    info = get_pause_info(case)
+    assert info["reason"] == "disputed"
+    assert info["detail"] == "wrong amount"
+    assert info["at"] is not None
+
+
+def test_get_pause_info_for_max_touch_cap(session, make_invoice):
+    invoice = make_invoice(outstanding=10_000.0, invoice_no="PI-3")
+    case = Case(invoice_id=invoice.id, customer_id=invoice.customer_id, bucket="0-15")
+    session.add(case)
+    session.commit()
+
+    pause_case(session, case, reason="max_touch_cap_reached")
+    session.commit()
+
+    info = get_pause_info(case)
+    assert info["reason"] == "max_touch_cap_reached"
+    assert info["detail"] is None
