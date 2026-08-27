@@ -466,6 +466,7 @@ def settings_page(request: Request, session: Session = Depends(get_session)):
             "sendgrid_configured": bool(os.getenv("SENDGRID_API_KEY")),
             "anthropic_configured": chatbot_agent.is_configured(),
             "test_email_override": os.getenv("TEST_EMAIL_OVERRIDE") or None,
+            "test_voice_override": os.getenv("TEST_VOICE_OVERRIDE") or None,
             "payment_notify_whatsapp_to": os.getenv("PAYMENT_NOTIFY_WHATSAPP_TO") or None,
         },
     )

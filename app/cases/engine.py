@@ -569,7 +569,11 @@ def preview_next_message(session: Session, case: Case, now: dt.datetime | None =
 
     email_override = os.getenv("TEST_EMAIL_OVERRIDE")
     if level["channel"] == "email" and email_override:
-        to, cc = email_override, None  # mirrors EmailChannel.send() — see CONTEXT.md
+        to, cc = email_override, None  # mirrors EmailChannel.send()
+
+    voice_override = os.getenv("TEST_VOICE_OVERRIDE")
+    if level["channel"] == "voice" and voice_override:
+        to, cc = voice_override, None  # mirrors VoiceChannel.send()
 
     invoice_rows = _customer_invoice_rows(customer) if level["channel"] == "email" else []
     would_pay_all = len(invoice_rows) > 1
@@ -714,10 +718,15 @@ def _voice_message_for_case(session: Session, case: Case, today: dt.date) -> tup
 
 def preview_voice_call(session: Session, case: Case, today: dt.date | None = None) -> dict:
     """Read-only: what the voice call for THIS case would say and who it'd
-    dial, using real case data — no call is placed."""
+    dial, using real case data — no call is placed. `to` is always the
+    case's real customer number (same convention as send_voice_call_test);
+    `dialed` is set only when a test override would redirect the actual
+    call elsewhere."""
     today = today or dt.date.today()
     to, body = _voice_message_for_case(session, case, today)
-    return {"to": to, "body": body}
+    voice_override = os.getenv("TEST_VOICE_OVERRIDE")
+    dialed = voice_override if voice_override and voice_override != to else None
+    return {"to": to, "dialed": dialed, "body": body}
 
 
 def send_voice_call_test(session: Session, case: Case, today: dt.date | None = None) -> dict:
@@ -729,6 +738,11 @@ def send_voice_call_test(session: Session, case: Case, today: dt.date | None = N
     today = today or dt.date.today()
     to, body = _voice_message_for_case(session, case, today)
     result = get_channel("voice").send(to=to, cc=None, subject="Voice test", body=body)
+    # The event logs the case's real customer number regardless of any test
+    # override — same convention as email dispatch events — so the audit
+    # trail always reflects who this escalation was really for.
     record_event(session, case, type="dispatch", channel="voice", payload={"to": to, "status": result.status, "detail": result.detail, "test": True})
     session.commit()
-    return {"to": to, "body": body, "status": result.status, "detail": result.detail}
+    voice_override = os.getenv("TEST_VOICE_OVERRIDE")
+    dialed = voice_override if voice_override and voice_override != to else None
+    return {"to": to, "dialed": dialed, "body": body, "status": result.status, "detail": result.detail}

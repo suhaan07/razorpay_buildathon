@@ -280,10 +280,11 @@ def test_force_dispatch_sends_immediately_bypassing_next_action_at(session, make
     assert case.level_index > level_after_first  # advanced despite not being "due"
 
 
-def test_preview_voice_call_uses_real_case_data_regardless_of_level(session, make_customer, make_invoice):
+def test_preview_voice_call_uses_real_case_data_regardless_of_level(session, make_customer, make_invoice, monkeypatch):
     # voice is normally only reached after spoc/manager/skip_level are all
     # exhausted — this must render the real voice script for THIS case even
     # though it's still sitting at level 0 (or hasn't been dispatched at all).
+    monkeypatch.delenv("TEST_VOICE_OVERRIDE", raising=False)
     customer = make_customer(name="Voice Preview Co", phone="+919876512345")
     make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=45), invoice_no="VOICE-1")
     sync_cases(session)
@@ -292,6 +293,7 @@ def test_preview_voice_call_uses_real_case_data_regardless_of_level(session, mak
 
     preview = preview_voice_call(session, case, today=dt.date.today())
     assert preview["to"] == "+919876512345"
+    assert preview["dialed"] is None  # no override configured — nothing to redirect
     assert "Voice Preview Co" in preview["body"]
     assert "VOICE-1" in preview["body"]
 
@@ -300,7 +302,23 @@ def test_preview_voice_call_uses_real_case_data_regardless_of_level(session, mak
     assert len(case.events) == 1  # only sync_cases' case_created event
 
 
-def test_send_voice_call_test_does_not_advance_the_case(session, make_customer, make_invoice):
+def test_preview_voice_call_shows_the_override_target_without_changing_to(session, make_customer, make_invoice, monkeypatch):
+    # `to` must keep showing the case's real customer number (consistent
+    # with send_voice_call_test and the dispatch-event audit trail) even
+    # while a test override is active — only `dialed` reflects the redirect.
+    monkeypatch.setenv("TEST_VOICE_OVERRIDE", "+911111111111")
+    customer = make_customer(name="Voice Override Preview Co", phone="+919876512347")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=45), invoice_no="VOICE-3")
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    preview = preview_voice_call(session, case, today=dt.date.today())
+    assert preview["to"] == "+919876512347"
+    assert preview["dialed"] == "+911111111111"
+
+
+def test_send_voice_call_test_does_not_advance_the_case(session, make_customer, make_invoice, monkeypatch):
+    monkeypatch.delenv("TEST_VOICE_OVERRIDE", raising=False)
     customer = make_customer(name="Voice Call Co", phone="+919876512346")
     make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=10), invoice_no="VOICE-2")
     sync_cases(session)
@@ -308,6 +326,7 @@ def test_send_voice_call_test_does_not_advance_the_case(session, make_customer, 
 
     result = send_voice_call_test(session, case, today=dt.date.today())
     assert result["to"] == "+919876512346"
+    assert result["dialed"] is None  # no override configured
     assert result["status"] in ("logged", "sent")  # "logged" since no real Twilio creds in tests
 
     session.refresh(case)
@@ -315,7 +334,27 @@ def test_send_voice_call_test_does_not_advance_the_case(session, make_customer, 
     assert case.level_index == 0
     assert case.touch_count == 0
     assert case.next_action_at is None
-    assert any(e.type == "dispatch" and e.channel == "voice" and (e.payload or {}).get("test") is True for e in case.events)
+    dispatch_events = [e for e in case.events if e.type == "dispatch" and e.channel == "voice" and (e.payload or {}).get("test") is True]
+    assert len(dispatch_events) == 1
+    # the audit trail always logs the case's real customer number, even
+    # with an override active — see the sibling override test below
+    assert dispatch_events[0].payload["to"] == "+919876512346"
+
+
+def test_send_voice_call_test_with_override_still_logs_the_real_number(session, make_customer, make_invoice, monkeypatch):
+    monkeypatch.setenv("TEST_VOICE_OVERRIDE", "+911111111111")
+    customer = make_customer(name="Voice Call Override Co", phone="+919876512348")
+    make_invoice(customer=customer, outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=10), invoice_no="VOICE-4")
+    sync_cases(session)
+    case = session.query(Case).one()
+
+    result = send_voice_call_test(session, case, today=dt.date.today())
+    assert result["to"] == "+919876512348"  # the case's real number, for display
+    assert result["dialed"] == "+911111111111"  # what was actually dialed
+
+    session.refresh(case)
+    dispatch_event = next(e for e in case.events if e.type == "dispatch" and e.channel == "voice")
+    assert dispatch_event.payload["to"] == "+919876512348"  # audit trail: real customer number, not the override
 
 
 def test_set_case_level_updates_index_and_playbook(session, make_invoice):

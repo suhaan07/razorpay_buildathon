@@ -79,7 +79,7 @@
     </div>
   </div>
 
-  {% if test_email_override or payment_notify_whatsapp_to %}
+  {% if test_email_override or test_voice_override or payment_notify_whatsapp_to %}
   <div class="card p-5">
     <h2 class="text-sm font-semibold mb-3.5">Testing overrides active</h2>
     <div class="flex flex-col gap-3 text-sm">
@@ -89,6 +89,15 @@
         <div class="min-w-0">
           <div class="num">{{ test_email_override }}</div>
           <div class="text-xs text-[var(--text-muted)] mt-0.5">Every escalation email redirects here instead of real recipients.</div>
+        </div>
+      </div>
+      {% endif %}
+      {% if test_voice_override %}
+      <div class="flex items-start gap-3">
+        <span class="pill shrink-0" style="background:var(--warning-soft);color:var(--warning)">TEST_VOICE_OVERRIDE</span>
+        <div class="min-w-0">
+          <div class="num">{{ test_voice_override }}</div>
+          <div class="text-xs text-[var(--text-muted)] mt-0.5">Every voice call dials this number instead of the sheet's (often unverified) customer phone.</div>
         </div>
       </div>
       {% endif %}

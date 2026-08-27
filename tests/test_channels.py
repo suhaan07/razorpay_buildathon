@@ -13,8 +13,41 @@ def test_log_channel_always_logged():
 def test_voice_falls_back_to_log_without_credentials(monkeypatch):
     monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TEST_VOICE_OVERRIDE", raising=False)
     result = VoiceChannel().send(to="+911234567890", cc=None, subject="s", body="hello")
     assert result.status == "logged"
+
+
+def test_voice_test_override_redirects_the_call(monkeypatch):
+    # A trial Twilio account can only call verified numbers — every
+    # synthetic customer phone in the demo sheet is unverified and gets
+    # rejected. TEST_VOICE_OVERRIDE mirrors TEST_EMAIL_OVERRIDE: redirect
+    # the destination, keep the script itself real.
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("TEST_VOICE_OVERRIDE", "+911111111111")
+
+    captured = {}
+
+    def fake_send(self, *, to, cc, subject, body, html=None):
+        captured.update(to=to, body=body)
+        return ChannelResult(status="logged", detail="ok")
+
+    monkeypatch.setattr(LogChannel, "send", fake_send)
+
+    VoiceChannel().send(to="+919876500001", cc=None, subject="Voice test", body="hello there")
+
+    assert captured["to"] == "+911111111111"
+    assert captured["body"] == "hello there"  # the script itself is untouched, only the destination changes
+
+
+def test_voice_without_override_calls_the_real_number(monkeypatch):
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TEST_VOICE_OVERRIDE", raising=False)
+
+    result = VoiceChannel().send(to="+919876500001", cc=None, subject="s", body="hello")
+    assert "+919876500001" in result.detail
 
 
 def test_email_falls_back_to_log_without_credentials(monkeypatch):

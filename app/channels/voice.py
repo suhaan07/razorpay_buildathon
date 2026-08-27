@@ -18,6 +18,18 @@ class VoiceChannel(Channel):
     name = "voice"
 
     def send(self, *, to: str, cc: str | None, subject: str, body: str, html: str | None = None) -> ChannelResult:
+        override = os.getenv("TEST_VOICE_OVERRIDE")
+        if override:
+            # A trial Twilio account can only place calls to numbers
+            # verified in the Console — every synthetic customer phone in
+            # the demo sheet is unverified and gets rejected with "Unable
+            # to create record... unverified" otherwise. Mirrors
+            # EmailChannel's TEST_EMAIL_OVERRIDE: redirect the destination,
+            # keep the script itself real (the case's timeline still shows
+            # who it would really have gone to — see engine.py's dispatch
+            # event, which logs the pre-override `to`).
+            to = override
+
         if not twilio_client.is_configured():
             return LogChannel().send(to=to, cc=cc, subject=subject, body=body, html=html)
 

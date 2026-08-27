@@ -440,9 +440,11 @@
         voiceResultEl.innerHTML = '<div class="text-sm text-[var(--text-muted)]">Loading preview…</div>';
         const resp = await fetch(`/api/cases/${caseId}/voice-preview`);
         const data = await resp.json();
+        const wouldDial = data.dialed || data.to;
         voiceResultEl.innerHTML = `
           <div class="card p-4 text-sm flex flex-col gap-2" style="border-color:var(--accent)">
-            <div><span class="text-[var(--text-muted)]">Would call:</span> <span class="num break-all">${data.to}</span></div>
+            <div><span class="text-[var(--text-muted)]">Would call:</span> <span class="num break-all">${wouldDial}</span></div>
+            ${data.dialed ? `<div class="text-xs text-[var(--warning)]">Test override active — this case's real number is <span class="num break-all">${data.to}</span></div>` : ''}
             <pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px]">${data.body}</pre>
           </div>`;
       });
@@ -453,9 +455,11 @@
         const resp = await fetch(`/api/cases/${caseId}/voice-test`, { method: 'POST' });
         const data = await resp.json();
         const color = data.status === 'sent' ? 'var(--success)' : (data.status === 'logged' ? 'var(--text-muted)' : 'var(--danger)');
+        const dialed = data.dialed || data.to;
         voiceResultEl.innerHTML = `
           <div class="card p-4 text-sm flex flex-col gap-2">
-            <div><span class="text-[var(--text-muted)]">Called:</span> <span class="num break-all">${data.to}</span> — <span style="color:${color}"><strong>${data.status}</strong></span> ${data.detail || ''}</div>
+            <div><span class="text-[var(--text-muted)]">Called:</span> <span class="num break-all">${dialed}</span> — <span style="color:${color}"><strong>${data.status}</strong></span> ${data.detail || ''}</div>
+            ${data.dialed ? `<div class="text-xs text-[var(--warning)]">Test override active — this case's real number is <span class="num break-all">${data.to}</span></div>` : ''}
             <pre class="whitespace-pre-wrap bg-[var(--surface-2)] rounded-lg p-3 text-[13px]">${data.body}</pre>
           </div>`;
         ev.target.disabled = false;
