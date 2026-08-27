@@ -6,19 +6,29 @@
 
   <div class="grid sm:grid-cols-2 gap-4">
     <div class="card p-4">
-      <h2 class="text-sm font-semibold mb-2">Ingest a sheet</h2>
+      <div class="flex items-center gap-3 mb-3.5">
+        <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" style="color:var(--text-muted)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </span>
+        <h2 class="text-sm font-semibold">Ingest a sheet</h2>
+      </div>
       <form id="upload-form" class="flex flex-wrap items-center gap-2.5">
         <input type="file" id="file-input" accept=".xlsx" class="text-sm border border-[var(--border)] rounded-lg px-3 py-2 bg-[var(--surface)] file:mr-3 file:border-0 file:bg-[var(--accent-soft)] file:text-[var(--accent)] file:font-semibold file:rounded-md file:px-3 file:py-1.5">
         <button type="submit" class="btn btn-primary">Upload</button>
       </form>
-      <div id="upload-result" class="text-xs mt-2"></div>
+      <div id="upload-result" class="mt-3"></div>
     </div>
     <div class="card p-4">
-      <h2 class="text-sm font-semibold mb-2">Run the escalation engine</h2>
+      <div class="flex items-center gap-3 mb-3.5">
+        <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" style="color:var(--text-muted)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </span>
+        <h2 class="text-sm font-semibold">Run the escalation engine</h2>
+      </div>
       <div class="flex flex-wrap items-center gap-2.5">
         <button id="run-batch" class="btn btn-primary" style="background:var(--success)">Run batch (decide + dispatch)</button>
-        <span id="auto-dispatch-status" class="text-xs"></span>
       </div>
+      <div id="auto-dispatch-status" class="mt-3"></div>
       <div id="batch-result" class="text-xs mt-2"></div>
     </div>
   </div>
@@ -64,6 +74,12 @@ const BUCKET_PILL = {
 
 let activeTab = 'All';
 let searchTimer = null;
+
+function statusBadge(tone, html) {
+  return `<div class="inline-flex items-center gap-2 text-xs rounded-lg px-3 py-1.5" style="background:var(--${tone}-soft);color:var(--${tone})">
+    <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:var(--${tone})"></span>${html}
+  </div>`;
+}
 
 function tabCard(tab) {
   const active = tab.key === activeTab;
@@ -133,11 +149,14 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
   const resp = await fetch('/upload', { method: 'POST', body: formData });
   const data = await resp.json();
   if (resp.ok) {
-    el.innerHTML = `<span class="text-[var(--success)]">Ingested ${data.row_count} rows across ${data.customer_count} customers.</span> ` +
-      (data.missing_due_date_count ? `<span class="text-[var(--warning)]">${data.missing_due_date_count} rows missing a due date.</span>` : '');
+    const hasWarning = data.missing_due_date_count > 0;
+    const tone = hasWarning ? 'warning' : 'success';
+    const msg = `Ingested ${data.row_count} rows across ${data.customer_count} customers.` +
+      (hasWarning ? ` ${data.missing_due_date_count} row${data.missing_due_date_count === 1 ? '' : 's'} missing a due date.` : '');
+    el.innerHTML = statusBadge(tone, msg);
     load();
   } else {
-    el.innerHTML = `<span class="text-[var(--danger)]">${data.detail}</span>`;
+    el.innerHTML = statusBadge('danger', data.detail);
   }
 });
 
@@ -148,19 +167,20 @@ document.getElementById('run-batch').addEventListener('click', async () => {
     const resp = await fetch('/batch/run', { method: 'POST' });
     const text = await resp.text();
     if (!resp.ok) {
-      el.innerHTML = `<span class="text-[var(--danger)]">Batch run failed (HTTP ${resp.status}): ${text.slice(0, 500)}</span>`;
+      el.innerHTML = statusBadge('danger', `Batch run failed (HTTP ${resp.status}): ${text.slice(0, 500)}`);
       return;
     }
     const data = JSON.parse(text);
     if (data.auto_dispatch_paused) {
-      el.innerHTML = `<span class="text-[var(--warning)]">Auto-dispatch is paused — nothing was sent, no links were created. Toggle it on in <a href="/settings" class="underline">Settings</a> if you meant to dispatch for real.</span>`;
+      el.innerHTML = statusBadge('warning', 'Nothing was sent — auto-dispatch is off.');
       return;
     }
-    const failedNote = data.failed ? ` <span class="text-[var(--danger)]">failed=${data.failed} (see a case's timeline for the error)</span>` : '';
-    el.innerHTML = `<span class="num">processed=${data.processed} dispatched=${data.dispatched} paused=${data.paused} exhausted=${data.exhausted}</span>${failedNote}`;
+    const tone = data.failed ? 'danger' : 'success';
+    const failedNote = data.failed ? ` &middot; ${data.failed} failed (see a case's timeline)` : '';
+    el.innerHTML = statusBadge(tone, `<span class="num">processed=${data.processed} dispatched=${data.dispatched} paused=${data.paused} exhausted=${data.exhausted}</span>${failedNote}`);
     load();
   } catch (err) {
-    el.innerHTML = `<span class="text-[var(--danger)]">Request failed: ${err}</span>`;
+    el.innerHTML = statusBadge('danger', `Request failed: ${err}`);
   }
 });
 
@@ -169,8 +189,8 @@ document.getElementById('run-batch').addEventListener('click', async () => {
   const data = await resp.json();
   const el = document.getElementById('auto-dispatch-status');
   el.innerHTML = data.auto_dispatch_paused
-    ? '<span class="text-[var(--warning)]">Auto-dispatch is OFF — Run batch will do nothing until you turn it on in <a href="/settings" class="underline">Settings</a>.</span>'
-    : '<span class="text-[var(--danger)]">Auto-dispatch is ON — Run batch will actually send.</span>';
+    ? statusBadge('warning', 'Auto-dispatch is off — nothing will send until you enable it in <a href="/settings" class="underline font-medium">Settings</a>.')
+    : statusBadge('danger', 'Auto-dispatch is on — this will actually send.');
 })();
 
 load();
