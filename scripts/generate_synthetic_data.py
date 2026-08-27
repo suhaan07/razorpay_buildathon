@@ -14,6 +14,7 @@ import random
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
 random.seed(42)
 
@@ -225,10 +226,26 @@ def build_rows() -> list[dict]:
     return rows
 
 
+# Default (unset) column widths leave the three date columns too narrow for
+# their own "YYYY-MM-DD" format — unlike text, Excel never overflows a
+# number/date into an empty neighboring cell, so a too-narrow date column
+# renders as "####" instead of just looking cramped. Set explicit widths for
+# every column so nothing hashes out and the sheet is legible on open.
+_COLUMN_WIDTHS = {
+    "Customer": 32, "SPOC": 16, "SPOC Email": 30, "Manager Name": 16, "Manager Email": 30,
+    "Skip Level Name": 16, "Skip Level Email": 30, "Email": 30, "Phone": 16, "Invoice No": 12,
+    "Invoice Date": 14, "Due Date": 14, "Inv Amount": 14, "Received": 14, "Outstanding": 14, "Paid Date": 14,
+}
+
+
 def main() -> None:
     rows = build_rows()
     df = pd.DataFrame(rows)
-    df.to_excel(OUT_PATH, index=False)
+    with pd.ExcelWriter(OUT_PATH, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
+        ws = writer.sheets["Sheet1"]
+        for i, col_name in enumerate(df.columns, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = _COLUMN_WIDTHS.get(col_name, 16)
     outstanding_rows = df[df["Outstanding"] > 0]
     print(f"wrote {len(df)} rows ({len(outstanding_rows)} currently outstanding) to {OUT_PATH}")
 
