@@ -66,8 +66,9 @@ decide → escalate → close loop still runs exactly as it would live.
 - `pytest` — 343 tests, all passing.
 
 Wiring up real Razorpay/Twilio/SendGrid credentials (to see a real WhatsApp
-reply, a real escalation email, or a real payment close a case) is covered
-step by step in [DESIGN.md §12](DESIGN.md#12-getting-credentials).
+reply, a real escalation email, or a real payment close a case) — every var
+that unlocks is documented inline in `.env.example`; nothing there is
+required to run the app.
 
 ## Portal
 
@@ -104,15 +105,6 @@ app/
   portal/                       FastAPI routes + Jinja2/Tailwind templates
 ```
 
-## Docs
-
-- **[FEATURES.md](FEATURES.md)** — the complete reference: every formula,
-  every table, every tool, every config knob, current as of this commit.
-- **[DESIGN.md](DESIGN.md)** — the original technical spec: data model,
-  requirements, external APIs, and full credential setup instructions.
-- **[CONTEXT.md](CONTEXT.md)** — the track brief and the narrative behind
-  the architectural choices.
-
 ## Tech stack
 
 FastAPI · SQLAlchemy 2.0 · SQLite · Jinja2 + Tailwind · pytest · Razorpay ·
@@ -124,5 +116,4 @@ Twilio (WhatsApp Sandbox + Voice) · SendGrid · Anthropic Claude
 Bank reconciliation for payments received outside Razorpay — handled via
 manual dispute-flagging instead of automated matching. No ML anywhere in the
 decision path: the urgency score, reliability score, and cash-flow forecast
-are all transparent formulas, not trained models. Full reasoning in
-[FEATURES.md §21](FEATURES.md#21-deliberate-non-goals).
+are all transparent formulas, not trained models.
