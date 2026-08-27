@@ -9,93 +9,133 @@
 
   <div class="card p-5">
     <div class="flex flex-wrap items-center justify-between gap-4">
-      <div>
-        <h2 class="text-sm font-semibold">Auto-dispatch</h2>
-        <p class="text-xs text-[var(--text-muted)] mt-1 max-w-xl">When ON, "Run batch" on the Upload page decides and sends every case that's due — each new escalation can mint a real Razorpay payment link. When OFF, "Run batch" does nothing (it still keeps cases/reliability scores in sync). Per-case "Send now (test)" on the Cases page always works either way — this only guards the automatic sweep.</p>
+      <div class="flex items-center gap-3.5">
+        <span id="auto-dispatch-icon-wrap" class="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[18px] h-[18px]" style="color:var(--text-muted)"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </span>
+        <div>
+          <h2 class="text-sm font-semibold">Auto-dispatch</h2>
+          <p class="text-xs text-[var(--text-muted)] mt-0.5">Batch runs send for real and can mint payment links. Per-case test-send always works either way.</p>
+        </div>
       </div>
-      <button id="auto-dispatch-toggle" class="btn btn-secondary" disabled>Loading…</button>
+      <label class="switch">
+        <input type="checkbox" id="auto-dispatch-checkbox" disabled>
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </label>
     </div>
   </div>
 
   <div class="card p-5">
-    <h2 class="text-sm font-semibold mb-3">Integration status</h2>
-    <div class="grid sm:grid-cols-3 gap-3 text-sm">
-      <div class="card p-3.5">
-        <div class="text-xs text-[var(--text-muted)] mb-1">Razorpay</div>
-        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if razorpay_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
-          {{ 'configured' if razorpay_configured else 'not configured (stub links)' }}
+    <h2 class="text-sm font-semibold mb-3.5">Integration status</h2>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+      <div class="card p-3.5 flex items-start gap-3">
+        <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" style="color:var(--text-muted)"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
         </span>
+        <div class="min-w-0">
+          <div class="text-xs font-semibold">Razorpay</div>
+          <div class="flex items-center gap-1.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{{ 'var(--success)' if razorpay_configured else 'var(--text-muted)' }}"></span>
+            <span class="text-[11px] text-[var(--text-muted)]">{{ 'Live' if razorpay_configured else 'Stub links' }}</span>
+          </div>
+        </div>
       </div>
-      <div class="card p-3.5">
-        <div class="text-xs text-[var(--text-muted)] mb-1">Twilio (voice + WhatsApp)</div>
-        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if twilio_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
-          {{ 'configured' if twilio_configured else 'not configured (log-only)' }}
+      <div class="card p-3.5 flex items-start gap-3">
+        <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" style="color:var(--text-muted)"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
         </span>
+        <div class="min-w-0">
+          <div class="text-xs font-semibold">Twilio</div>
+          <div class="flex items-center gap-1.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{{ 'var(--success)' if twilio_configured else 'var(--text-muted)' }}"></span>
+            <span class="text-[11px] text-[var(--text-muted)]">{{ 'Voice + WhatsApp live' if twilio_configured else 'Log-only' }}</span>
+          </div>
+        </div>
       </div>
-      <div class="card p-3.5">
-        <div class="text-xs text-[var(--text-muted)] mb-1">SendGrid (email)</div>
-        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if sendgrid_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
-          {{ 'configured' if sendgrid_configured else 'not configured (log-only)' }}
+      <div class="card p-3.5 flex items-start gap-3">
+        <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" style="color:var(--text-muted)"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>
         </span>
+        <div class="min-w-0">
+          <div class="text-xs font-semibold">SendGrid</div>
+          <div class="flex items-center gap-1.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{{ 'var(--success)' if sendgrid_configured else 'var(--text-muted)' }}"></span>
+            <span class="text-[11px] text-[var(--text-muted)]">{{ 'Email live' if sendgrid_configured else 'Log-only' }}</span>
+          </div>
+        </div>
       </div>
-      <div class="card p-3.5">
-        <div class="text-xs text-[var(--text-muted)] mb-1">Chatbot (Anthropic)</div>
-        <span class="pill" style="{{ 'background:var(--success-soft);color:var(--success)' if anthropic_configured else 'background:var(--surface-2);color:var(--text-muted)' }}">
-          {{ 'configured' if anthropic_configured else 'not configured' }}
+      <div class="card p-3.5 flex items-start gap-3">
+        <span class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background:var(--surface-2)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" style="color:var(--text-muted)"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </span>
+        <div class="min-w-0">
+          <div class="text-xs font-semibold">Chatbot</div>
+          <div class="flex items-center gap-1.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{{ 'var(--success)' if anthropic_configured else 'var(--text-muted)' }}"></span>
+            <span class="text-[11px] text-[var(--text-muted)]">{{ 'Enabled' if anthropic_configured else 'Disabled' }}</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
+  {% if test_email_override or payment_notify_whatsapp_to %}
   <div class="card p-5">
-    <h2 class="text-sm font-semibold mb-3">Testing overrides in effect</h2>
-    <div class="flex flex-col gap-2 text-sm">
-      <div>
-        <span class="text-[var(--text-muted)]">TEST_EMAIL_OVERRIDE:</span>
-        {% if test_email_override %}
-          <span class="num">{{ test_email_override }}</span> — every escalation email is redirected here instead of the sheet's real spoc/manager/skip_level addresses.
-        {% else %}
-          <span class="text-[var(--text-muted)]">not set — emails go to real per-customer recipients.</span>
-        {% endif %}
+    <h2 class="text-sm font-semibold mb-3.5">Testing overrides active</h2>
+    <div class="flex flex-col gap-3 text-sm">
+      {% if test_email_override %}
+      <div class="flex items-start gap-3">
+        <span class="pill shrink-0" style="background:var(--warning-soft);color:var(--warning)">TEST_EMAIL_OVERRIDE</span>
+        <div class="min-w-0">
+          <div class="num">{{ test_email_override }}</div>
+          <div class="text-xs text-[var(--text-muted)] mt-0.5">Every escalation email redirects here instead of real recipients.</div>
+        </div>
       </div>
-      <div>
-        <span class="text-[var(--text-muted)]">PAYMENT_NOTIFY_WHATSAPP_TO:</span>
-        {% if payment_notify_whatsapp_to %}
-          <span class="num">{{ payment_notify_whatsapp_to }}</span> — fallback recipient for the payment-received WhatsApp alert when nobody has queried that account yet.
-        {% else %}
-          <span class="text-[var(--text-muted)]">not set — payment-received alerts only reach whoever last WhatsApp-queried that account.</span>
-        {% endif %}
+      {% endif %}
+      {% if payment_notify_whatsapp_to %}
+      <div class="flex items-start gap-3">
+        <span class="pill shrink-0" style="background:var(--warning-soft);color:var(--warning)">PAYMENT_NOTIFY_WHATSAPP_TO</span>
+        <div class="min-w-0">
+          <div class="num">{{ payment_notify_whatsapp_to }}</div>
+          <div class="text-xs text-[var(--text-muted)] mt-0.5">Fallback recipient for payment/digest alerts when nobody has queried that account yet.</div>
+        </div>
       </div>
+      {% endif %}
     </div>
   </div>
+  {% endif %}
 </div>
 
+<style>
+  .switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+  .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .switch-track { width: 42px; height: 24px; background: var(--border); border-radius: 999px; position: relative; transition: background .15s ease; }
+  .switch-thumb { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,0.25); transition: transform .15s ease; }
+  .switch input:checked + .switch-track { background: var(--danger); }
+  .switch input:checked + .switch-track .switch-thumb { transform: translateX(18px); }
+  .switch input:disabled + .switch-track { opacity: 0.5; cursor: not-allowed; }
+  .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
 <script>
-const toggleBtn = document.getElementById('auto-dispatch-toggle');
+const checkbox = document.getElementById('auto-dispatch-checkbox');
+const iconWrap = document.getElementById('auto-dispatch-icon-wrap');
 
 function renderToggle(paused) {
-  toggleBtn.disabled = false;
-  toggleBtn.dataset.paused = paused;
-  if (paused) {
-    toggleBtn.textContent = 'Auto-dispatch: OFF (paused)';
-    toggleBtn.className = 'btn btn-secondary';
-    toggleBtn.style.background = '';
-  } else {
-    toggleBtn.textContent = 'Auto-dispatch: ON';
-    toggleBtn.className = 'btn btn-primary';
-    toggleBtn.style.background = 'var(--danger)';
-  }
+  checkbox.disabled = false;
+  checkbox.checked = !paused;
+  iconWrap.style.background = paused ? 'var(--surface-2)' : 'var(--danger-soft)';
+  iconWrap.querySelector('svg').style.color = paused ? 'var(--text-muted)' : 'var(--danger)';
 }
 
 renderToggle({{ 'true' if auto_dispatch_paused else 'false' }});
 
-toggleBtn.addEventListener('click', async () => {
-  const currentlyPaused = toggleBtn.dataset.paused === 'true';
-  toggleBtn.disabled = true;
+checkbox.addEventListener('change', async () => {
+  const nextPaused = !checkbox.checked;
+  checkbox.disabled = true;
   const resp = await fetch('/api/settings/auto-dispatch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paused: !currentlyPaused }),
+    body: JSON.stringify({ paused: nextPaused }),
   });
   const data = await resp.json();
   renderToggle(data.auto_dispatch_paused);

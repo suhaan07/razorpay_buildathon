@@ -315,7 +315,7 @@ def test_chat_page_shows_not_configured_warning(client, monkeypatch):
 
 def test_chat_page_lists_settings_tile(client):
     resp = client.get("/settings")
-    assert "Chatbot (Anthropic)" in resp.text
+    assert "Chatbot" in resp.text
 
 
 def test_api_chat_delegates_to_agent_and_updates_state(client, monkeypatch):

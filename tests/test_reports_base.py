@@ -21,7 +21,11 @@ def test_ambiguous_customer(session, make_customer, make_invoice):
 
 def test_matched_customer_computes_expected_numbers(session, make_customer, make_invoice):
     customer = make_customer(name="Alpha Textiles Pvt Ltd", spoc="Aditi Rao")
-    today = dt.date.today()
+    # Fixed Wednesday, not dt.date.today() — THISWEEK-1's due_date (monday+2,
+    # i.e. Wednesday) must stay in the future relative to "today" so it's
+    # due-this-week WITHOUT also being overdue; that relationship silently
+    # broke on any real-world Wednesday-or-later test run.
+    today = dt.date(2026, 1, 7)
     monday = today - dt.timedelta(days=today.weekday())
 
     make_invoice(customer=customer, invoice_no="OVERDUE-1", outstanding=10_000.0, due_date=today - dt.timedelta(days=20))
@@ -29,7 +33,7 @@ def test_matched_customer_computes_expected_numbers(session, make_customer, make
     make_invoice(customer=customer, invoice_no="PAID-1", outstanding=0.0, due_date=today - dt.timedelta(days=5))
     make_invoice(customer=customer, invoice_no="UNCLASSIFIED-1", outstanding=2_000.0, due_date=None)
 
-    result = get_customer_report_data(session, "alpha textiles")
+    result = get_customer_report_data(session, "alpha textiles", today=today)
     assert result.status == "matched"
     data = result.data
     assert data.overdue_amount == 10_000.0
