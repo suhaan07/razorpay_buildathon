@@ -63,7 +63,7 @@ def test_get_settings_creates_a_default_row_paused_by_default(session):
     assert settings.auto_dispatch_paused is True
 
 
-def test_run_batch_does_nothing_while_auto_dispatch_paused(session, make_invoice):
+def test_run_batch_does_not_dispatch_while_auto_dispatch_paused(session, make_invoice):
     make_invoice(outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PAUSED-1")
     get_settings(session).auto_dispatch_paused = True
     session.commit()
@@ -73,20 +73,58 @@ def test_run_batch_does_nothing_while_auto_dispatch_paused(session, make_invoice
     assert summary["auto_dispatch_paused"] is True
     assert summary["dispatched"] == 0
     case = session.query(Case).one()
-    assert case.playbook_name is None  # sync_cases still ran (case exists), nothing was ever dispatched
+    # scoring still ran (see below), but nothing was ever dispatched — so
+    # the case's real escalation state (what a later real dispatch would
+    # advance from) is untouched.
+    assert case.playbook_name is None
+    assert case.level_index == 0
+    assert case.touch_count == 0
+    assert case.pay_link_id is None
+    assert not any(e.type == "dispatch" for e in case.events)
 
 
-def test_run_batch_still_syncs_cases_and_scores_while_paused(session, make_invoice):
-    # sync_cases()/refresh_all_reliability_scores() never touch Razorpay or
-    # send anything, so they should still run even while dispatch is paused
-    # — only the actual send loop is gated.
+def test_run_batch_still_scores_cases_while_paused(session, make_invoice):
+    # Scoring (the decision layer) is read-only/informational, unlike an
+    # actual dispatch — it should still run and be visible on the case's
+    # timeline even while sending is paused, so a human can see what WOULD
+    # happen without it actually happening (no payment link, no email).
     make_invoice(outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PAUSED-2")
     get_settings(session).auto_dispatch_paused = True
     session.commit()
 
-    run_batch(session, now=FIXED_NOW)
+    summary = run_batch(session, now=FIXED_NOW)
 
     assert session.query(Case).count() == 1  # sync_cases created it despite the pause
+    assert summary["processed"] == 1  # one case scored
+    case = session.query(Case).one()
+    decision_events = [e for e in case.events if e.type == "decision"]
+    assert len(decision_events) == 1
+    assert decision_events[0].rationale is not None
+    assert decision_events[0].payload["suggested_level"] == "spoc"
+    assert decision_events[0].payload["urgency_score"] > 0
+    # but its real escalation state stays untouched — see the sibling test
+    assert case.playbook_name is None
+
+
+def test_run_batch_scoring_while_paused_does_not_cause_a_level_skip_later(session, make_invoice):
+    # The critical correctness case: score a case while paused, THEN turn
+    # auto-dispatch on and run for real. The real dispatch must still start
+    # at spoc (level_index 0) — if the paused scoring pass had persisted
+    # case.level_index/playbook_name, the real run would see "already at
+    # this level" and advance PAST spoc, so the very first actual email
+    # would skip straight to manager without spoc ever having been sent.
+    make_invoice(outstanding=10_000.0, due_date=dt.date.today() - dt.timedelta(days=5), invoice_no="PAUSED-3")
+    get_settings(session).auto_dispatch_paused = True
+    session.commit()
+    run_batch(session, now=FIXED_NOW)  # scoring-only pass
+
+    get_settings(session).auto_dispatch_paused = False
+    session.commit()
+    summary = run_batch(session, now=FIXED_NOW)
+
+    assert summary["dispatched"] == 1
+    case = session.query(Case).one()
+    assert case.level_index == 0  # spoc — not skipped past
 
 
 def test_force_dispatch_case_ignores_the_pause(session, make_invoice):

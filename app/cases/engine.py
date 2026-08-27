@@ -369,6 +369,23 @@ def _next_level_index_for_existing_case(case: Case, decision) -> int:
     return max(case.level_index + 1, min(decision.suggested_level, VOICE_LEVEL_INDEX - 1))
 
 
+def _decide_and_record(session: Session, case: Case, today: dt.date):
+    """The read-only half of _process_one_case: builds context, runs the
+    homegrown decision layer, and logs the result as a `decision` CaseEvent
+    (urgency score + suggested level + rationale) — visible on the case's
+    timeline and as its "why this schedule" summary regardless of whether
+    anything actually gets dispatched off the back of it. Deliberately
+    doesn't touch case.level_index/playbook_name/touch_count — see
+    run_batch()'s auto_dispatch_paused branch for why that matters."""
+    ctx = _build_case_context(session, case, today)
+    decision = decide(ctx)
+    record_event(
+        session, case, type="decision", rationale=decision.rationale,
+        payload={"suggested_level": LEVEL_NAMES[decision.suggested_level], "urgency_score": decision.urgency_score, "wait_days": decision.wait_days, "source": decision.source},
+    )
+    return ctx, decision
+
+
 def _process_one_case(session: Session, case: Case, playbook: dict, now: dt.datetime, today: dt.date) -> str:
     """Runs the decide -> advance/exhaust -> dispatch logic for exactly one
     case. Returns "dispatched" | "exhausted" | "failed". Shared by run_batch()
@@ -377,12 +394,7 @@ def _process_one_case(session: Session, case: Case, playbook: dict, now: dt.date
 
     levels = playbook["levels"]
     try:
-        ctx = _build_case_context(session, case, today)
-        decision = decide(ctx)
-        record_event(
-            session, case, type="decision", rationale=decision.rationale,
-            payload={"suggested_level": LEVEL_NAMES[decision.suggested_level], "urgency_score": decision.urgency_score, "wait_days": decision.wait_days, "source": decision.source},
-        )
+        ctx, decision = _decide_and_record(session, case, today)
 
         if case.playbook_name is not None and case.level_index >= VOICE_LEVEL_INDEX:
             # already made the final voice call and it still went unanswered/unpaid
@@ -430,16 +442,42 @@ def run_batch(session: Session, now: dt.datetime | None = None) -> dict:
     newly_broken_promises = resolve_promises(session, today)
 
     if get_settings(session).auto_dispatch_paused:
-        # Neither of the above touches Razorpay or sends anything, so they
-        # still run — cases/scores stay current. Only the actual dispatch
-        # loop below (which can mint a real payment link per case) is
-        # gated. force_dispatch_case() (the per-case "Send now (test)"
-        # button) deliberately does NOT check this — a human explicitly
-        # asking to send one case is not what this switch guards against.
-        # Broken promises are still worth a digest even while paused —
-        # they're discovered by time passing, not by dispatching anything.
+        # Scoring is informational, not a side effect — so it still runs for
+        # every due case even while dispatch is paused: this logs a fresh
+        # `decision` CaseEvent (urgency score, suggested level, rationale)
+        # for each one, visible on its timeline/"why this schedule" panel.
+        # Deliberately does NOT set case.level_index/playbook_name/
+        # touch_count, and does NOT call _dispatch_level — no payment link
+        # is minted, no email/voice call goes out. This distinction matters:
+        # if a "decided" level were persisted onto the case here, the next
+        # REAL dispatch (once auto-dispatch is turned on) would see
+        # playbook_name already set and treat it as "already at this level,
+        # advance past it" (_next_level_index_for_existing_case), silently
+        # skipping the level that was only ever previewed, never sent.
+        # Leaving the case's real state untouched means turning
+        # auto-dispatch on later behaves exactly as if this scoring pass
+        # had never happened.
+        scored = 0
+        for case in due_cases(session, now):
+            try:
+                _decide_and_record(session, case, today)
+                session.commit()
+                scored += 1
+            except Exception:  # noqa: BLE001 - one bad case must not sink the scoring pass
+                session.rollback()
+                logger.exception("case %s: scoring failed while auto-dispatch is paused", case.id)
+
+        # Neither sync_cases/refresh_all_reliability_scores/resolve_promises
+        # above, nor the scoring pass just above, touch Razorpay or send
+        # anything, so they still run — cases/scores/decisions stay current.
+        # Only the actual dispatch loop below (which can mint a real payment
+        # link per case) is gated. force_dispatch_case() (the per-case "Send
+        # now (test)" button) deliberately does NOT check this — a human
+        # explicitly asking to send one case is not what this switch guards
+        # against. Broken promises are still worth a digest even while
+        # paused — they're discovered by time passing, not by dispatching.
         _send_digest_if_anything_new(session, newly_broken_promises, [])
-        return {"processed": 0, "dispatched": 0, "paused": 0, "exhausted": 0, "failed": 0, "auto_dispatch_paused": True}
+        return {"processed": scored, "dispatched": 0, "paused": 0, "exhausted": 0, "failed": 0, "auto_dispatch_paused": True}
 
     playbook = get_playbook(PLAYBOOK_NAME)
     processed, dispatched, paused, exhausted, failed = 0, 0, 0, 0, 0

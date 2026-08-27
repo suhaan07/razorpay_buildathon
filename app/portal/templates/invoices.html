@@ -172,7 +172,7 @@ document.getElementById('run-batch').addEventListener('click', async () => {
     }
     const data = JSON.parse(text);
     if (data.auto_dispatch_paused) {
-      el.innerHTML = statusBadge('warning', 'Nothing was sent — auto-dispatch is off.');
+      el.innerHTML = statusBadge('warning', `<span class="num">Scored ${data.processed} case(s)</span> — nothing sent, no links created (auto-dispatch is off).`);
       return;
     }
     const tone = data.failed ? 'danger' : 'success';
